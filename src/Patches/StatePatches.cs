@@ -4,51 +4,76 @@ using HarmonyLib;
 namespace ACS.Patches;
 
 /// <summary>
-/// 状态触发：战斗粘滞、问候动画。
+/// 状态触发：PC 主动攻击 combat 窗口、问候动画。
+/// combat 倒计时复用原版 combatCount（Tick 每回合 -1）。
 /// </summary>
 [HarmonyPatch]
 internal class CombatPatch
 {
+    /// <summary>
+    /// 近战攻击入口：原版 ActMelee.Attack 开头写 combatCount，但多数路径不调 DoHostileAction。
+    /// 秒杀时目标已死，DoHostileAction 会 early-return，必须在此打 acs_combat 标记。
+    /// </summary>
+    [HarmonyPostfix]
+    [HarmonyPatch(typeof(ActMelee), nameof(ActMelee.Attack))]
+    internal static void OnMeleeAttack()
+    {
+        var cc = Act.CC;
+        if (cc is null || !cc.IsPC) {
+            return;
+        }
+
+        AcsStateResolver.MarkActiveCombat(cc);
+    }
+
+    /// <summary>
+    /// PC 造成伤害（远程/法术/投掷等）：覆盖非近战主动攻击与秒杀。
+    /// origin 为攻击者；被打时 origin 是敌人，不会误开 combat。
+    /// </summary>
+    [HarmonyPostfix]
+    [HarmonyPatch(typeof(Card), nameof(Card.DamageHP), new[] {
+        typeof(long), typeof(int), typeof(int), typeof(AttackSource), typeof(Card),
+        typeof(bool), typeof(Thing), typeof(Chara), typeof(int)
+    })]
+    internal static void OnDamageHP(Card origin)
+    {
+        if (origin is not Chara attacker || !attacker.IsPC) {
+            return;
+        }
+
+        AcsStateResolver.MarkActiveCombat(attacker);
+    }
+
+    /// <summary>
+    /// 其它主动敌对动作（部分技能/交互仍走此路径）。
+    /// 被打 / SetEnemy 不触发。
+    /// </summary>
     [HarmonyPostfix]
     [HarmonyPatch(typeof(Chara), nameof(Chara.DoHostileAction))]
     internal static void OnDoHostileAction(Chara __instance, Card _tg)
     {
-        if (__instance is null) {
+        if (__instance is null || !__instance.IsPC) {
             return;
         }
 
-        // PC 发起攻击（含 ActMelee/ActRanged）
-        if (__instance.IsPC) {
-            AcsStateResolver.MarkCombat(__instance);
-        }
-
-        // PC 被攻击：原版会设 combatCount，这里同步粘滞
-        if (_tg != null && _tg.isChara) {
-            var target = _tg.Chara;
-            if (target != null && target.IsPC) {
-                AcsStateResolver.MarkCombat(target);
-            }
-        }
+        AcsStateResolver.MarkActiveCombat(__instance);
     }
 
     /// <summary>
-    /// 部分路径只 SetEnemy 不经 DoHostileAction；PC 被设为敌对目标时也开粘滞。
+    /// Tick 已 combatCount-- 后：主动攻击窗口到期时检测 1 次视野敌对。
     /// </summary>
     [HarmonyPostfix]
-    [HarmonyPatch(typeof(Chara), nameof(Chara.SetEnemy))]
-    internal static void OnSetEnemy(Chara __instance, Chara c)
+    [HarmonyPatch(typeof(Chara), nameof(Chara.Tick))]
+    internal static void OnTick(Chara __instance)
     {
-        if (c is null) {
+        if (__instance is null || !__instance.IsPC) {
             return;
         }
-        if (c.IsPC) {
-            AcsStateResolver.MarkCombat(c);
-        }
-        if (__instance != null && __instance.IsPC) {
-            AcsStateResolver.MarkCombat(__instance);
-        }
+
+        AcsStateResolver.OnPcTickCombatWindow(__instance);
     }
 }
+
 
 [HarmonyPatch]
 internal class GreetPatch

@@ -334,7 +334,7 @@ internal class PccRenderPatch
     /// <summary>
     /// 左右朝向（贴图默认朝左：flip=false 左，true 右）：
     /// PC 键盘：只认 EInput.axis.x（勿 ConvertAxis）。A/D 更新；纯 W/S 粘滞。
-    /// PC 点地：无键时用「当前一步」格子的 map-x（movePoint / path 下一步），竖步粘滞。
+    /// PC 点地：无键时用「当前一步」的屏幕水平分量（等距 screenX∝mapX+mapZ），纯屏竖步粘滞。
     /// PC 绝不用 angle（等距 W≈NE 会误改朝向）。
     /// NPC：angle 8 扇区；纯 N/S 粘滞。
     /// 必须按 actor 分状态，禁止全局 lastFlip。
@@ -401,8 +401,9 @@ internal class PccRenderPatch
     }
 
     /// <summary>
-    /// 点地朝向：只看「当前这一步」的地图 Δx，不看最终终点、不用 angle。
-    /// 有水平分量则更新；纯上下步返回 false（调用方保持 lastFlip）。
+    /// 点地朝向：看「当前这一步」的屏幕水平分量，不看最终终点、不用 angle。
+    /// 等距 Point.Position：screenX ∝ (mapX+mapZ)，故 map 纯 ±z（屏上右上/左下）也有水平分量。
+    /// 有屏水平分量则更新；纯屏竖步（map dx=-dz）返回 false（调用方保持 lastFlip）。
     ///
     /// 原版点地链路（IL 已核）：
     /// - 邻格/按住：AM_Adv → GoalManualMove，步进向量在 Player.nextMove（及 static dest）
@@ -412,18 +413,12 @@ internal class PccRenderPatch
     private static bool TryFlipFromClickStep(Chara owner, ref bool lastFlip)
     {
         try {
-            // 1) GoalManualMove / 箭头 / 按住点地：nextMove 即本步 (map dx, dz)
+            // 1) GoalManualMove / 箭头 / 按住点地：nextMove 即本步 (map dx, map dz→y)
             Player? player = EClass.player;
             if (player is not null) {
                 Vector2 nm = player.nextMove;
-                if (Mathf.Abs(nm.x) > 0.01f) {
-                    lastFlip = nm.x > 0f;
-                    return true;
-                }
-
-                // 纯竖步 nextMove：粘滞
-                if (Mathf.Abs(nm.y) > 0.01f) {
-                    return false;
+                if (Mathf.Abs(nm.x) > 0.01f || Mathf.Abs(nm.y) > 0.01f) {
+                    return TryApplyScreenHorizontalFlip(nm.x, nm.y, ref lastFlip);
                 }
             }
 
@@ -431,18 +426,10 @@ internal class PccRenderPatch
             if (owner.ai is GoalManualMove && owner.pos is not null) {
                 Point dest = GoalManualMove.dest;
                 if (dest is not null && dest.IsValid && !dest.Equals(owner.pos)) {
-                    int dxDest = dest.x - owner.pos.x;
-                    if (dxDest > 0) {
-                        lastFlip = true;
-                        return true;
-                    }
-
-                    if (dxDest < 0) {
-                        lastFlip = false;
-                        return true;
-                    }
-
-                    return false;
+                    return TryApplyScreenHorizontalFlip(
+                        dest.x - owner.pos.x,
+                        dest.z - owner.pos.z,
+                        ref lastFlip);
                 }
             }
 
@@ -470,19 +457,10 @@ internal class PccRenderPatch
                     return false;
                 }
 
-                int dx = node.X - owner.pos.x;
-                if (dx > 0) {
-                    lastFlip = true;
-                    return true;
-                }
-
-                if (dx < 0) {
-                    lastFlip = false;
-                    return true;
-                }
-
-                // 纯竖步：粘滞
-                return false;
+                return TryApplyScreenHorizontalFlip(
+                    node.X - owner.pos.x,
+                    node.Z - owner.pos.z,
+                    ref lastFlip);
             }
 
             return false;
@@ -490,6 +468,22 @@ internal class PccRenderPatch
         catch {
             return false;
         }
+    }
+
+    /// <summary>
+    /// 地图步进 (dx,dz) → 等距屏幕水平符号。
+    /// Point.Position：screenX = (x+z)*tileAlign.x，故水平分量符号 = sign(dx+dz)。
+    /// 右上(+z)/右下(+x) → 朝右；左下(-z)/左上(-x) → 朝左；纯屏竖(dx=-dz) → 粘滞。
+    /// </summary>
+    private static bool TryApplyScreenHorizontalFlip(float mapDx, float mapDz, ref bool lastFlip)
+    {
+        float screenH = mapDx + mapDz;
+        if (Mathf.Abs(screenH) <= 0.01f) {
+            return false;
+        }
+
+        lastFlip = screenH > 0f;
+        return true;
     }
 
     /// <summary>

@@ -1,7 +1,5 @@
 ﻿namespace ACS.API;
 
-using System.Collections.Generic;
-using System.Runtime.CompilerServices;
 using UnityEngine;
 
 public static class AcsStateResolver
@@ -9,19 +7,17 @@ public static class AcsStateResolver
     // greet 触发后延迟再激活，避免气泡一出就切动画
     private const float GreetDelay = 0.2f;
 
-    /// <summary>PC 手动攻击时写入的战斗粘滞标记（mapStr key）。</summary>
-    public const string CombatFlagKey = "acs_combat";
+    /// <summary>
+    /// PC 主动攻击后 combat ACS 保持回合数。
+    /// 复用原版 <see cref="Chara.combatCount"/>（Chara.Tick 每回合 -1）。
+    /// </summary>
+    public const int CombatHoldTurns = 5;
 
     /// <summary>
-    /// 无明确敌对目标后，战斗粘滞最多再保持多久（秒）。
-    /// 有人把 PC 当 enemy / PC 有 enemy / GoalCombat 时不看超时。
+    /// 标记本段 combatCount 来自 PC 主动攻击（非被打/换装等原版写入）。
+    /// 仅作开关，倒计时用 combatCount。
     /// </summary>
-    private const float CombatStickySeconds = 8f;
-
-    // 全图 charas 扫描降频：同窗口内按角色缓存结果（约 6 次/秒 @60fps）
-    private const int HostileScanIntervalFrames = 10;
-    private static int _hostileCacheFrame = -999;
-    private static readonly Dictionary<int, bool> HostileTargetCache = new Dictionary<int, bool>();
+    public const string CombatFlagKey = "acs_combat";
 
     /// <summary>
     /// 基础状态优先级：战斗 > 移动(仅 PC) > greet(NPC) > 异常 > idle
@@ -62,8 +58,11 @@ public static class AcsStateResolver
 
     /// <summary>
     /// 是否应播 combat ACS。
-    /// 原版 IsInCombat = ai is GoalCombat；PC 手动点怪往往不挂 GoalCombat、GoHostile 对 IsPC 不写 enemy。
-    /// 补充：combatCount、被敌对锁定、DoHostileAction 粘滞标记。
+    /// <list type="bullet">
+    /// <item>自动战斗：原版 <see cref="Chara.IsInCombat"/>（ai is GoalCombat）</item>
+    /// <item>PC 主动攻击：ActMelee/DamageHP/DoHostileAction 写入 combatCount=5 + 标记；到期后 Tick 用 CanSee/IsHostile 检测 1 次视野</item>
+    /// <item>NPC：原版 combatCount（近战等会写 10）</item>
+    /// </list>
     /// </summary>
     public static bool IsCombatVisual(Chara chara)
     {
@@ -71,86 +70,98 @@ public static class AcsStateResolver
             return false;
         }
 
+        // 自动战斗（GoalCombat）
         if (chara.IsInCombat) {
             return true;
         }
 
-        if (chara.combatCount > 0) {
-            return true;
+        // PC：仅主动攻击开启的窗口（combatCount 由原版 Tick 递减）
+        if (chara.IsPC) {
+            return IsActiveCombatWindow(chara);
         }
 
-        if (HasLiveEnemy(chara)) {
-            return true;
-        }
-
-        if (IsTargetedByHostile(chara)) {
-            return true;
-        }
-
-        if (chara.IsPC && HasCombatSticky(chara)) {
-            return true;
-        }
-
-        return false;
+        // NPC：跟原版武器显隐同一信号
+        return chara.combatCount > 0;
     }
 
-    /// <summary>PC 发起/卷入敌对时调用，开启 combat ACS 粘滞。</summary>
-    public static void MarkCombat(Chara chara)
+    /// <summary>PC 主动攻击：写入原版 combatCount=5 并打标记。</summary>
+    public static void MarkActiveCombat(Chara chara)
     {
-        if (chara is null) {
+        if (chara is null || !chara.IsPC) {
             return;
         }
 
-        chara.mapStr.Set(CombatFlagKey, Time.realtimeSinceStartup.ToString());
+        chara.combatCount = CombatHoldTurns;
+        chara.mapStr.Set(CombatFlagKey, "1");
     }
 
-    /// <summary>明确脱战时清粘滞（可选）。</summary>
+    /// <summary>兼容旧调用名。</summary>
+    public static void MarkCombat(Chara chara) => MarkActiveCombat(chara);
+
+    /// <summary>结束主动攻击 combat 窗口。</summary>
     public static void ClearCombat(Chara chara)
     {
         chara?.mapStr.Remove(CombatFlagKey);
     }
 
-    private static bool HasLiveEnemy(Chara chara)
-    {
-        var e = chara.enemy;
-        if (e is null) {
-            return false;
-        }
-
-        return e.IsAliveInCurrentZone && e.ExistsOnMap && !e.isDead;
-    }
-
-    private static bool IsTargetedByHostile(Chara chara)
-    {
-        if (chara is null) {
-            return false;
-        }
-
-        int key = RuntimeHelpers.GetHashCode(chara);
-        int fc = Time.frameCount;
-        bool windowFresh = (fc - _hostileCacheFrame) < HostileScanIntervalFrames;
-        if (windowFresh && HostileTargetCache.TryGetValue(key, out bool cached)) {
-            return cached;
-        }
-
-        if (!windowFresh) {
-            HostileTargetCache.Clear();
-            _hostileCacheFrame = fc;
-        }
-
-        bool hit = ScanTargetedByHostile(chara);
-        HostileTargetCache[key] = hit;
-        return hit;
-    }
-
-    /// <summary>控制台重载等：丢掉敌对扫描缓存，下次立刻全图扫。</summary>
+    /// <summary>控制台重载等：清 PC 主动战斗标记。</summary>
     public static void ClearHostileScanCache()
     {
-        HostileTargetCache.Clear();
-        _hostileCacheFrame = -999;
+        try {
+            var pc = EClass.pc;
+            if (pc != null) {
+                ClearCombat(pc);
+            }
+        }
+        catch {
+            // 主菜单
+        }
     }
 
-    private static bool ScanTargetedByHostile(Chara chara)
+    /// <summary>
+    /// Chara.Tick 已把 combatCount-- 之后调用：
+    /// 主动攻击窗口到期时，用原版 CanSee + IsHostile 检测 1 次视野内敌对；
+    /// 有则再续 5 回合，无则清标记。
+    /// </summary>
+    public static void OnPcTickCombatWindow(Chara pc)
+    {
+        if (pc is null || !pc.IsPC) {
+            return;
+        }
+
+        if (!pc.mapStr.ContainsKey(CombatFlagKey)) {
+            return;
+        }
+
+        // 窗口内：继续播 combat
+        if (pc.combatCount > 0) {
+            return;
+        }
+
+        // 刚好耗尽：检测 1 次视野
+        if (HasHostileInFov(pc)) {
+            pc.combatCount = CombatHoldTurns;
+            return;
+        }
+
+        ClearCombat(pc);
+    }
+
+    private static bool IsActiveCombatWindow(Chara pc)
+    {
+        if (!pc.mapStr.ContainsKey(CombatFlagKey)) {
+            return false;
+        }
+
+        return pc.combatCount > 0;
+    }
+
+    /// <summary>
+    /// 视野内是否有敌对。原版接口：
+    /// <see cref="Chara.CanSee"/>（PC 用 fov.lastPoints）、
+    /// <see cref="Chara.IsHostile(Chara)"/>。
+    /// </summary>
+    private static bool HasHostileInFov(Chara pc)
     {
         try {
             var map = EClass._map;
@@ -159,11 +170,7 @@ public static class AcsStateResolver
             }
 
             foreach (Chara c in map.charas) {
-                if (c is null || c == chara || c.isDead) {
-                    continue;
-                }
-
-                if (c.enemy != chara) {
+                if (c is null || c == pc || c.isDead) {
                     continue;
                 }
 
@@ -171,45 +178,19 @@ public static class AcsStateResolver
                     continue;
                 }
 
-                // 友军互指不算战斗演出
-                if (chara.IsPCFactionOrMinion && c.IsPCFactionOrMinion) {
+                if (!pc.CanSee(c)) {
                     continue;
                 }
 
-                return true;
+                if (pc.IsHostile(c) || c.IsHostile(pc)) {
+                    return true;
+                }
             }
         }
         catch {
             // 主菜单 / 地图未就绪
         }
 
-        return false;
-    }
-
-    private static bool HasCombatSticky(Chara chara)
-    {
-        if (!chara.mapStr.TryGetValue(CombatFlagKey, out string value)
-            || !float.TryParse(value, out float started)) {
-            return false;
-        }
-
-        float elapsed = Time.realtimeSinceStartup - started;
-        if (elapsed < 0f) {
-            ClearCombat(chara);
-            return false;
-        }
-
-        // 仍有明确敌对：保持 combat，并刷新起点避免长战中途断
-        if (HasLiveEnemy(chara) || IsTargetedByHostile(chara) || chara.IsInCombat) {
-            MarkCombat(chara);
-            return true;
-        }
-
-        if (elapsed <= CombatStickySeconds) {
-            return true;
-        }
-
-        ClearCombat(chara);
         return false;
     }
 
