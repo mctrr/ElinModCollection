@@ -9,6 +9,8 @@
 .tmp_decomp/
 .tmp_decomp_full/
 .tmp_dump/
+_elinmeta/
+--force/
 
 # Visual Studio / VS Code
 .vs/
