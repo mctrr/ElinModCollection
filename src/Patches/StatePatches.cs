@@ -4,7 +4,7 @@ using HarmonyLib;
 namespace ACS.Patches;
 
 /// <summary>
-/// 状态触发：PC 主动攻击 combat 窗口、问候动画。
+/// 状态触发：PC 主动攻击 / 换主手 combat 窗口、问候动画。
 /// combat 倒计时复用原版 combatCount（Tick 每回合 -1）。
 /// </summary>
 [HarmonyPatch]
@@ -57,6 +57,33 @@ internal class CombatPatch
         }
 
         AcsStateResolver.MarkActiveCombat(__instance);
+    }
+
+    /// <summary>
+    /// 主手装上/换成武器：开 5 回合 combat。
+    /// 卸下主手（变空）不播 combat；换防具等主手未变也不触发。
+    /// </summary>
+    [HarmonyPrefix]
+    [HarmonyPatch(typeof(CharaBody), nameof(CharaBody.Equip))]
+    internal static void OnEquipPrefix(CharaBody __instance, ref Thing? __state)
+    {
+        __state = __instance?.slotMainHand?.thing;
+    }
+
+    [HarmonyPostfix]
+    [HarmonyPatch(typeof(CharaBody), nameof(CharaBody.Equip))]
+    internal static void OnEquipPostfix(CharaBody __instance, Thing? __state)
+    {
+        if (__instance?.owner is not Chara chara || !chara.IsPC) {
+            return;
+        }
+
+        Thing? mainHandAfter = __instance.slotMainHand?.thing;
+        if (mainHandAfter is null || ReferenceEquals(__state, mainHandAfter)) {
+            return;
+        }
+
+        AcsStateResolver.MarkActiveCombat(chara);
     }
 
     /// <summary>

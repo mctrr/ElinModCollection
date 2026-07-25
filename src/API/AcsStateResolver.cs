@@ -14,10 +14,15 @@ public static class AcsStateResolver
     public const int CombatHoldTurns = 5;
 
     /// <summary>
-    /// 标记本段 combatCount 来自 PC 主动攻击（非被打/换装等原版写入）。
+    /// 标记本段 combatCount 来自 ACS 主动窗口（攻击或换主手），非被动挨打。
     /// 仅作开关，倒计时用 combatCount。
     /// </summary>
     public const string CombatFlagKey = "acs_combat";
+
+    // 原版 SKILL.weapon*（与 SourceCategory.Row.skill 对齐）
+    private const int SkillSword = 101;
+    private const int SkillStaff = 103;
+    private const int SkillPolearm = 106;
 
     /// <summary>
     /// 基础状态优先级：战斗 > 移动(仅 PC) > greet(NPC) > 异常 > idle
@@ -60,7 +65,7 @@ public static class AcsStateResolver
     /// 是否应播 combat ACS。
     /// <list type="bullet">
     /// <item>自动战斗：原版 <see cref="Chara.IsInCombat"/>（ai is GoalCombat）</item>
-    /// <item>PC 主动攻击：ActMelee/DamageHP/DoHostileAction 写入 combatCount=5 + 标记；到期后 Tick 用 CanSee/IsHostile 检测 1 次视野</item>
+    /// <item>PC 主动窗口：攻击或换主手写入 combatCount=5 + 标记；到期后 Tick 用 CanSee/IsHostile 检测 1 次视野</item>
     /// <item>NPC：原版 combatCount（近战等会写 10）</item>
     /// </list>
     /// </summary>
@@ -75,7 +80,7 @@ public static class AcsStateResolver
             return true;
         }
 
-        // PC：仅主动攻击开启的窗口（combatCount 由原版 Tick 递减）
+        // PC：仅主动窗口（combatCount 由原版 Tick 递减）
         if (chara.IsPC) {
             return IsActiveCombatWindow(chara);
         }
@@ -84,7 +89,58 @@ public static class AcsStateResolver
         return chara.combatCount > 0;
     }
 
-    /// <summary>PC 主动攻击：写入原版 combatCount=5 并打标记。</summary>
+    /// <summary>
+    /// combat 资源子键：仅看主手装备类型（不看本次攻击方式）。
+    /// 返回 <c>sword</c> / <c>polearm</c> / <c>staff</c>；无专用映射返回 null（用通用 _acs_combat）。
+    /// </summary>
+    public static string? GetMainHandCombatWeaponKey(Chara chara)
+    {
+        if (chara is null) {
+            return null;
+        }
+
+        try {
+            Thing? w = chara.body?.slotMainHand?.thing;
+            if (w is null) {
+                return null;
+            }
+
+            SourceCategory.Row? cat = w.category;
+            if (cat is null) {
+                return null;
+            }
+
+            // skill 与原版武器熟练一致，优先
+            switch (cat.skill) {
+                case SkillSword:
+                    return "sword";
+                case SkillPolearm:
+                    return "polearm";
+                case SkillStaff:
+                    return "staff";
+            }
+
+            // 兜底：分类树（部分模组/数据 skill 异常时）
+            if (cat.IsChildOf("sword")) {
+                return "sword";
+            }
+
+            if (cat.IsChildOf("polearm")) {
+                return "polearm";
+            }
+
+            if (cat.IsChildOf("staff")) {
+                return "staff";
+            }
+        }
+        catch {
+            // 主菜单 / body 未就绪
+        }
+
+        return null;
+    }
+
+    /// <summary>PC 主动攻击或换主手：写入 combatCount=5 并打标记。</summary>
     public static void MarkActiveCombat(Chara chara)
     {
         if (chara is null || !chara.IsPC) {

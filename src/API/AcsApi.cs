@@ -71,6 +71,9 @@ public static class AcsController
     private const string KeyIdle = "_acs_idle";
     private const string KeyMove = "_acs_move";
     private const string KeyCombat = "_acs_combat";
+    private const string KeyCombatSword = "_acs_combat.sword";
+    private const string KeyCombatPolearm = "_acs_combat.polearm";
+    private const string KeyCombatStaff = "_acs_combat.staff";
     private const string KeyWet = "_acs_wet";
     private const string KeyDrunk = "_acs_drunk";
     private const string KeyConfused = "_acs_confused";
@@ -82,6 +85,9 @@ public static class AcsController
     private const string KeySnowIdle = "_acs_snow.idle";
     private const string KeySnowMove = "_acs_snow.move";
     private const string KeySnowCombat = "_acs_snow.combat";
+    private const string KeySnowCombatSword = "_acs_snow.combat.sword";
+    private const string KeySnowCombatPolearm = "_acs_snow.combat.polearm";
+    private const string KeySnowCombatStaff = "_acs_snow.combat.staff";
     private const string KeySnowWet = "_acs_snow.wet";
     private const string KeySnowDrunk = "_acs_snow.drunk";
     private const string KeySnowConfused = "_acs_snow.confused";
@@ -93,6 +99,9 @@ public static class AcsController
     private const string KeyMarriedIdle = "_acs_married.idle";
     private const string KeyMarriedMove = "_acs_married.move";
     private const string KeyMarriedCombat = "_acs_married.combat";
+    private const string KeyMarriedCombatSword = "_acs_married.combat.sword";
+    private const string KeyMarriedCombatPolearm = "_acs_married.combat.polearm";
+    private const string KeyMarriedCombatStaff = "_acs_married.combat.staff";
     private const string KeyMarriedWet = "_acs_married.wet";
     private const string KeyMarriedDrunk = "_acs_married.drunk";
     private const string KeyMarriedConfused = "_acs_married.confused";
@@ -109,20 +118,29 @@ public static class AcsController
     /// 从指定 suffixes 查找 ACS 片段（PC 的 Package Skin 与种族字典可能不同）。
     ///
     /// 查找顺序（简化）：
-    /// 1) 若有前缀：先找 _acs_{prefix}.{state}
-    /// 2) 仅当 state==idle 时，才允许旧式通用片 _acs_{prefix}
-    ///    （禁止用裸 _acs_snow 抢走 combat/move）
-    /// 3) 再找无前缀 _acs_{state}
-    /// 4) greet 找不到 → 清 greet 标记并重新解析（避免卡在空 greet）
-    /// 5) 其它非 idle 找不到 → 回退到对应 idle，避免缺 _acs_wet 时整段 ACS 失效
+    /// 1) combat：_acs_{prefix}.combat.{weapon} → _acs_{prefix}.combat → 无前缀同序
+    ///    weapon 仅 sword/polearm/staff（主手）；单套战斗动画只用 _acs_combat
+    /// 2) 其它状态：_acs_{prefix}.{state}
+    /// 3) 仅当 state==idle 时，才允许旧式通用片 _acs_{prefix}
+    /// 4) 再找无前缀 _acs_{state}
+    /// 5) greet 找不到 → 清 greet 标记并重新解析
+    /// 6) 其它非 idle 找不到 → 回退 idle
     /// </summary>
     public static SpriteData? GetAcsClip(this Chara chara, bool snow, Dictionary<string, SpriteData> suffixes)
     {
         string state = AcsStateResolver.GetState(chara);
         string? prefix = AcsStateResolver.GetPrefix(chara, snow);
+        string? weaponKey = state == "combat"
+            ? AcsStateResolver.GetMainHandCombatWeaponKey(chara)
+            : null;
 
         if (prefix != null) {
-            if (TryGetPrefixed(suffixes, prefix, state, out var prefixedState)) {
+            if (state == "combat") {
+                if (TryGetCombat(suffixes, prefix, weaponKey, out var prefixedCombat)) {
+                    return prefixedCombat;
+                }
+            }
+            else if (TryGetPrefixed(suffixes, prefix, state, out var prefixedState)) {
                 return prefixedState;
             }
 
@@ -132,7 +150,12 @@ public static class AcsController
             }
         }
 
-        if (suffixes.TryGetValue(StateKey(state), out var baseState)) {
+        if (state == "combat") {
+            if (TryGetCombat(suffixes, prefix: null, weaponKey, out var baseCombat)) {
+                return baseCombat;
+            }
+        }
+        else if (suffixes.TryGetValue(StateKey(state), out var baseState)) {
             return baseState;
         }
 
@@ -173,6 +196,75 @@ public static class AcsController
     {
         owner.mapStr.Remove("acs_override");
     }
+
+    /// <summary>
+    /// combat 选片：专用武器键 → 通用 combat。
+    /// 单套战斗动画只放 <c>_acs_combat</c>；多武器再加 <c>_acs_combat.sword</c> 等。
+    /// </summary>
+    private static bool TryGetCombat(
+        Dictionary<string, SpriteData> suffixes,
+        string? prefix,
+        string? weaponKey,
+        out SpriteData? data)
+    {
+        if (weaponKey != null) {
+            if (TryGetCombatWeapon(suffixes, prefix, weaponKey, out data)) {
+                return true;
+            }
+        }
+
+        if (prefix != null) {
+            return TryGetPrefixed(suffixes, prefix, "combat", out data);
+        }
+
+        return suffixes.TryGetValue(KeyCombat, out data);
+    }
+
+    private static bool TryGetCombatWeapon(
+        Dictionary<string, SpriteData> suffixes,
+        string? prefix,
+        string weaponKey,
+        out SpriteData? data)
+    {
+        if (prefix == null) {
+            return suffixes.TryGetValue(CombatWeaponKey(weaponKey), out data);
+        }
+
+        if (prefix == "snow") {
+            return suffixes.TryGetValue(SnowCombatWeaponKey(weaponKey), out data);
+        }
+
+        if (prefix == "married") {
+            return suffixes.TryGetValue(MarriedCombatWeaponKey(weaponKey), out data);
+        }
+
+        // 自定义 override：_acs_{prefix}.combat.{weapon}
+        return suffixes.TryGetValue("_acs_" + prefix + ".combat." + weaponKey, out data);
+    }
+
+    private static string CombatWeaponKey(string weaponKey)
+        => weaponKey switch {
+            "sword" => KeyCombatSword,
+            "polearm" => KeyCombatPolearm,
+            "staff" => KeyCombatStaff,
+            _ => KeyCombat,
+        };
+
+    private static string SnowCombatWeaponKey(string weaponKey)
+        => weaponKey switch {
+            "sword" => KeySnowCombatSword,
+            "polearm" => KeySnowCombatPolearm,
+            "staff" => KeySnowCombatStaff,
+            _ => KeySnowCombat,
+        };
+
+    private static string MarriedCombatWeaponKey(string weaponKey)
+        => weaponKey switch {
+            "sword" => KeyMarriedCombatSword,
+            "polearm" => KeyMarriedCombatPolearm,
+            "staff" => KeyMarriedCombatStaff,
+            _ => KeyMarriedCombat,
+        };
 
     /// <summary>状态名 → 预建键；未知状态才拼接（极少走）。</summary>
     private static string StateKey(string state)
