@@ -3,6 +3,8 @@ using System.Reflection.Emit;
 using ACS.API;
 using HarmonyLib;
 
+using UnityEngine;
+
 namespace ACS.Patches;
 
 /// <summary>
@@ -76,8 +78,16 @@ internal class RenderFramePatch
             return current;
         }
 
-        var data = chara.GetAcsClip(p.snow, suffixes);
-        if (data is not null) {
+       var data = chara.GetAcsClip(p.snow, suffixes);
+       if (data is not null) {
+            // combat: 优先 _bcs_combat 静态战斗图
+            if (AcsStateResolver.IsCombatVisual(chara)) {
+                var r = chara.spriteReplacer ?? chara.sourceCard?.replacer;
+                if (PcSkinPatch.TryGetStaticCombatData(chara, r, out var combatData)) {
+                    return combatData!;
+                }
+            }
+
             // greet 播到最后一帧附近时清标记，下次回到 idle/其它状态
             if (AcsStateResolver.IsGreetActive(chara) && data.frame > 0) {
                 int spriteIndex = SpriteIndexRef(actor);
@@ -89,6 +99,70 @@ internal class RenderFramePatch
             return data;
         }
 
-        return current;
+       return current;
+    }
+
+   // 跟踪上一帧应用过战斗 sprite 的 actor，用于 combat 结束时恢复原始 sprite
+   private static readonly System.Collections.Generic.HashSet<int> _combatSpriteActors = new System.Collections.Generic.HashSet<int>();
+
+    // 将 SpriteData 的第一帧应用到 CardActor 的 sr 和 mpb
+    private static void ApplySpriteToActor(CardActor actor, SpriteData spriteData)
+    {
+        var sprite = spriteData.GetSprite();
+        if (sprite is null || actor.sr is null) return;
+        actor.sr.sprite = sprite;
+        if (sprite.texture.filterMode != UnityEngine.FilterMode.Point)
+            sprite.texture.filterMode = UnityEngine.FilterMode.Point;
+        actor.mpb.SetTexture("_MainTex", sprite.texture);
+        var tex = sprite.texture;
+        var tr = sprite.textureRect;
+        float x0 = tr.x / (float)tex.width;
+        float x1 = tr.xMax / (float)tex.width;
+        float y0 = tr.yMin / (float)tex.height;
+        float y1 = tr.yMax / (float)tex.height;
+        bool flip = actor.sr.flipX;
+        var rect = flip ? new Vector4(x1, y0, x0, y1) : new Vector4(x0, y0, x1, y1);
+        actor.mpb.SetVector("_Rect", rect);
+        actor.mpb.SetFloat("_PixelHeight", sprite.rect.height);
+        actor.sr.SetPropertyBlock(actor.mpb);
+    }
+
+    [HarmonyPostfix]
+    [HarmonyPatch(typeof(CardActor), nameof(CardActor.OnRender))]
+    internal static void OnRenderPostfix(CardActor __instance, RenderParam p)
+    {
+        if (__instance is CharaActorPCC) return;
+        var owner = __instance.owner;
+        if (owner is not Chara chara) return;
+        int actorId = __instance.GetInstanceID();
+
+        if (AcsStateResolver.IsCombatVisual(chara))
+        {
+            var r = chara.spriteReplacer ?? chara.sourceCard?.replacer;
+            if (PcSkinPatch.TryGetStaticCombatData(chara, r, out var combatData))
+            {
+                _combatSpriteActors.Add(actorId);
+                ApplySpriteToActor(__instance, combatData);
+                return;
+            }
+        }
+
+        // 非 combat：上一帧有战斗 sprite 则恢复为正常贴图
+        if (_combatSpriteActors.Remove(actorId))
+        {
+            // 取正常非战斗 sprite（ACS clip 优先，否则用 replacer.data）
+            SpriteData normalData = null;
+            var r = chara.spriteReplacer ?? chara.sourceCard?.replacer;
+            var suffixes = AcsSuffixes.Resolve(chara);
+            if (suffixes != null) {
+                normalData = chara.GetAcsClip(false, suffixes);
+            }
+            if (normalData == null && r != null) {
+                normalData = r.data;
+            }
+            if (normalData != null) {
+                ApplySpriteToActor(__instance, normalData);
+            }
+        }
     }
 }

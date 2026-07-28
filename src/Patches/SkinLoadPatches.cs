@@ -19,6 +19,17 @@ internal class SkinListPatch
     [HarmonyPatch(typeof(SpriteReplacer), nameof(SpriteReplacer.ListSkins))]
     internal static void OnListSkins(Dictionary<string, SpriteReplacer> __result)
     {
+        var staticCombatMerges = new List<StaticCombatMerge>();
+
+        var staticCombatSkinIds = __result.Keys
+            .Where(id => id.EndsWith(PcSkinPatch.StaticCombatSuffix, StringComparison.Ordinal))
+            .ToArray();
+        foreach (var staticCombatSkinId in staticCombatSkinIds) {
+            if (TryMergeStaticCombatSkinIntoBase(staticCombatSkinId, __result) is { } merged) {
+                staticCombatMerges.Add(merged);
+            }
+        }
+
         var acsSkinIds = __result.Keys
             .Where(id => id.Contains("_acs_"))
             .ToArray();
@@ -28,6 +39,13 @@ internal class SkinListPatch
 
         foreach (var entry in __result) {
             NormalizeAcsSuffixes(entry.Value, entry.Key);
+        }
+
+        // _bcs_combat 仅写入 dictSkins[baseId]；NPC 的 sourceCard.replacer 由 Elin 单独 Reload
+        // 创建，并非同一实例，所以合并不会自动覆盖。
+        // 把结果广播给当前已加载且匹配的 NPC 运行时实例。
+        if (staticCombatMerges.Count > 0) {
+            BroadcastStaticCombatToCharaInstances(staticCombatMerges);
         }
 
         // ListSkins 完成后立刻给已在场的 PC 重绑
@@ -40,9 +58,108 @@ internal class SkinListPatch
     }
 
     /// <summary>
-    /// 把 ACS 格式的 skin（如 pcr_jinghua_acs_idle#200_0-3）合并到基础 skin（pcr_jinghua）的 suffixes 中。
+    /// 单次 _bcs_combat 合并结果，供 ListSkins 末尾广播给已加载 NPC 实例。
     /// </summary>
-    private static void MergeAcsSkinIntoBase(string acsSkinId, Dictionary<string, SpriteReplacer> dictSkins)
+    private readonly struct StaticCombatMerge
+    {
+        public string BaseId { get; }
+        public SpriteData Data { get; }
+        public StaticCombatMerge(string baseId, SpriteData data)
+        {
+            BaseId = baseId;
+            Data = data;
+        }
+    }
+
+    /// <summary>
+    /// 把静态战斗 skin（如 pcr_jinghua_bcs_combat）合并到底 base skin（pcr_jinghua）的 suffixes。
+    /// 合并成功时返回 (基名, 战斗数据)，用于 ListSkins 末尾广播到已加载 NPC 运行时实例。
+    /// </summary>
+    private static StaticCombatMerge? TryMergeStaticCombatSkinIntoBase(
+        string combatSkinId,
+        Dictionary<string, SpriteReplacer> dictSkins)
+    {
+        int suffixIdx = combatSkinId.IndexOf(PcSkinPatch.StaticCombatSuffix, StringComparison.Ordinal);
+        if (suffixIdx <= 0) {
+            return null;
+        }
+
+        string baseId = combatSkinId.Substring(0, suffixIdx);
+        if (!dictSkins.TryGetValue(baseId, out var baseSkin)
+            || !dictSkins.TryGetValue(combatSkinId, out var combatSkin)) {
+            return null;
+        }
+
+        var combatData = combatSkin.suffixes.TryGetValue("");
+        if (combatData is null) {
+            return null;
+        }
+
+        baseSkin.suffixes[PcSkinPatch.StaticCombatSuffix] = combatData;
+        dictSkins.Remove(combatSkinId);
+
+        AcsMod.Log($"skin '{baseId}' static combat image (from {combatSkinId})");
+        return new StaticCombatMerge(baseId, combatData);
+    }
+
+    /// <summary>
+    /// 把 ListSkins 合并得到的 _bcs_combat 复制到当前地图上已加载 NPC 的运行时 replacer。
+    /// 这些 replacer 与 dictSkins[baseId] 通常不是同一实例（Elin 内部 Reload 各自重建），
+    /// 所以合并不会自动覆盖。匹配走 c_idSpriteReplacer 经 NormalizeSkinId 后的基名。
+    /// PC 跳过：PC 的 spriteReplacer 已被 TryApplyPcSkin 直接绑定到 dictSkins[baseId]。
+    /// </summary>
+    private static void BroadcastStaticCombatToCharaInstances(List<StaticCombatMerge> merges)
+    {
+        try {
+            var map = EClass._map;
+            if (map?.charas is null) {
+                return;
+            }
+
+            int updated = 0;
+            foreach (var chara in map.charas) {
+                if (chara is null || chara.IsPC) {
+                    continue;
+                }
+
+                if (chara.c_idSpriteReplacer.IsEmpty()) {
+                    continue;
+                }
+
+                string normalized = PcSkinPatch.NormalizeSkinId(chara.c_idSpriteReplacer);
+                if (normalized.IsEmpty()) {
+                    continue;
+                }
+
+                foreach (var merge in merges) {
+                    if (normalized != merge.BaseId) {
+                        continue;
+                    }
+
+                    var replacer = chara.spriteReplacer ?? chara.sourceCard?.replacer;
+                    if (replacer?.suffixes is null) {
+                        break;
+                    }
+
+                    // 仅当缺位时注入：后续 ListSkins 不覆盖已写入的战斗数据
+                    if (!replacer.suffixes.TryGetValue(PcSkinPatch.StaticCombatSuffix, out var existing)
+                        || existing is null) {
+                        replacer.suffixes[PcSkinPatch.StaticCombatSuffix] = merge.Data;
+                        updated++;
+                    }
+                    break;
+                }
+            }
+
+            if (updated > 0) {
+                AcsMod.Log($"broadcast static combat to {updated} runtime chara instance(s)");
+            }
+        }
+        catch (Exception ex) {
+            AcsMod.Warn($"BroadcastStaticCombatToCharaInstances: {ex.Message}");
+        }
+    }
+private static void MergeAcsSkinIntoBase(string acsSkinId, Dictionary<string, SpriteReplacer> dictSkins)
     {
         int acsIdx = acsSkinId.IndexOf("_acs_");
         if (acsIdx < 0) {
@@ -356,12 +473,14 @@ internal class ReloadSuffixPatch
 
     [HarmonyPostfix]
     [HarmonyPatch(typeof(SpriteReplacer), nameof(SpriteReplacer.Reload))]
-    internal static void OnReloadSuffixes(SpriteReplacer __instance, string id, RenderData renderData)
+        internal static void OnReloadSuffixes(SpriteReplacer __instance, string id, RenderData renderData)
     {
         // 无底图 PCC 种族仍可能在 dictModItems 有 _acs_ 贴图
         if (__instance.suffixes.Count == 0) {
             var dictModItems = SpriteReplacer.dictModItems;
             if (dictModItems is null || id.IsEmpty()) {
+                // 即使无底图也尝试合并 _bcs_combat
+                TryMergeBcsCombatOnReload(__instance, id);
                 return;
             }
 
@@ -383,9 +502,78 @@ internal class ReloadSuffixPatch
         }
 
         if (__instance.suffixes.Count == 0) {
+            TryMergeBcsCombatOnReload(__instance, id);
             return;
         }
 
         SkinListPatch.NormalizeAcsSuffixes(__instance, id);
+        TryInjectStaticCombatFromDictSkins(__instance, id);
+        TryMergeBcsCombatOnReload(__instance, id);
+    }    private static void TryMergeBcsCombatOnReload(SpriteReplacer replacer, string id)
+    {
+        try {
+            if (replacer?.suffixes is null || id.IsEmpty()) {
+                return;
+            }
+
+            // 已存在则跳过
+            if (replacer.suffixes.TryGetValue(PcSkinPatch.StaticCombatSuffix, out var existing)
+                && existing is not null) {
+                return;
+            }
+
+            string combatSkinId = id + PcSkinPatch.StaticCombatSuffix;
+            if (!SpriteReplacer.dictSkins.TryGetValue(combatSkinId, out var combatSkin)) {
+                return;
+            }
+
+            var combatData = combatSkin.data;
+            if (combatData is null) {
+                return;
+            }
+
+            replacer.suffixes[PcSkinPatch.StaticCombatSuffix] = combatData;
+            AcsMod.Log($"skin '{id}' static combat merged on Reload (from {combatSkinId})");
+        }
+        catch (Exception ex) {
+            AcsMod.Warn($"TryMergeBcsCombatOnReload: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 从 <c>SpriteReplacer.dictSkins[id]</c> 取 _bcs_combat 注入当前 Reload 出的实例。
+    /// 跳过：当前实例已是 dictSkins[id]（PC 等）；已存在 _bcs_combat；dictSkins 中没合并。
+    /// </summary>
+    private static void TryInjectStaticCombatFromDictSkins(SpriteReplacer replacer, string id)
+    {
+        try {
+            if (replacer?.suffixes is null || id.IsEmpty()) {
+                return;
+            }
+
+            if (replacer.suffixes.TryGetValue(PcSkinPatch.StaticCombatSuffix, out var existing)
+                && existing is not null) {
+                return;
+            }
+
+            if (SpriteReplacer.dictSkins.TryGetValue(id) is not { } canonical) {
+                return;
+            }
+
+            if (ReferenceEquals(canonical, replacer)) {
+                return;
+            }
+
+            if (canonical.suffixes is null
+                || !canonical.suffixes.TryGetValue(PcSkinPatch.StaticCombatSuffix, out var combatData)
+                || combatData is null) {
+                return;
+            }
+
+            replacer.suffixes[PcSkinPatch.StaticCombatSuffix] = combatData;
+        }
+        catch (Exception ex) {
+            AcsMod.Warn($"TryInjectStaticCombatFromDictSkins: {ex.Message}");
+        }
     }
 }

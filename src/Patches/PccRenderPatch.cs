@@ -166,7 +166,7 @@ internal class PccRenderPatch
             }
         }
 
-        var staticData = PcSkinPatch.GetStaticSkinData(o.spriteReplacer);
+        var staticData = PcSkinPatch.GetStaticSkinData(o.spriteReplacer, o);
         if (staticData is null) {
             // 切勿 localScale=one：会把原版 PCC 的 source.size*SubPass 缩放打成 1
             return false;

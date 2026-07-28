@@ -14,6 +14,8 @@ namespace ACS.Patches;
 [HarmonyPatch]
 internal class PcSkinPatch
 {
+    internal const string StaticCombatSuffix = "_bcs_combat";
+
     private static int _lastListSkinsFrame = -999;
 
     [HarmonyPostfix]
@@ -128,6 +130,11 @@ internal class PcSkinPatch
             id = id.Substring(0, acsIdx);
         }
 
+        int staticCombatIdx = id.IndexOf(StaticCombatSuffix, StringComparison.Ordinal);
+        if (staticCombatIdx > 0) {
+            id = id.Substring(0, staticCombatIdx);
+        }
+
         return id;
     }
 
@@ -183,10 +190,14 @@ internal class PcSkinPatch
     /// <summary>
     /// 静态底图 SpriteData（无 ACS 时用）。
     /// </summary>
-    internal static SpriteData? GetStaticSkinData(SpriteReplacer? skin)
+    internal static SpriteData? GetStaticSkinData(SpriteReplacer? skin, Chara? owner = null)
     {
         if (skin is null) {
             return null;
+        }
+
+        if (owner is not null && TryGetStaticCombatData(owner, skin, out var combatData)) {
+            return combatData;
         }
 
         if (skin.data is not null && !skin.data.path.IsEmpty()) {
@@ -200,6 +211,38 @@ internal class PcSkinPatch
         }
 
         return null;
+    }
+
+    internal static bool TryGetStaticCombatData(
+        Chara owner,
+        SpriteReplacer? skin,
+        out SpriteData? data)
+    {
+        data = null;
+        if (owner is null || !AcsStateResolver.IsCombatVisual(owner)) {
+            return false;
+        }
+
+        // 优先从传入的 skin 查找
+        if (skin?.suffixes is not null
+            && skin.suffixes.TryGetValue(StaticCombatSuffix, out data)
+            && data is not null && !data.path.IsEmpty()) {
+            return true;
+        }
+
+        // 兜底：从 dictSkins 通过 c_idSpriteReplacer 查找（解决 NPC 运行时实例同步延迟）
+        if (!owner.c_idSpriteReplacer.IsEmpty()) {
+            string baseId = NormalizeSkinId(owner.c_idSpriteReplacer);
+            if (!baseId.IsEmpty()
+                && SpriteReplacer.dictSkins.TryGetValue(baseId, out var canonical)
+                && canonical.suffixes is not null
+                && canonical.suffixes.TryGetValue(StaticCombatSuffix, out data)
+                && data is not null && !data.path.IsEmpty()) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
 
