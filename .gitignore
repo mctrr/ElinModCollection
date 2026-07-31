@@ -11,7 +11,7 @@
 .tmp_dump/
 _elinmeta/
 --force/
-
+.agents/
 # Visual Studio / VS Code
 .vs/
 .vscode/
