@@ -10,128 +10,141 @@
   <description>
 [h1]Better Custom Sprites[/h1]
 
-基于 [b]Animated Custom Sprites[/b]（作者 DK）的增强版：状态感知动画、主角动态 Skin、NPC 战斗静态图等。
+基于 [b]Animated Custom Sprites[/b]（作者 DK）的增强版，新增角色状态感知的动画自动切换功能。
 
-[b]请先卸载原版 Animated Custom Sprites[/b]，否则会冲突。
+[b]原版 ACS 需要卸载[/b]，否则两者会冲突。
 
 仓库：[url=https://github.com/mctrr/BetterCustomSprites]github.com/mctrr/BetterCustomSprites[/url]
 
-[hr][/hr]
+[h2]与原版 ACS 的区别[/h2]
 
-[h1]给玩家[/h1]
+原版 Animated Custom Sprites 只支持 [b]combat[/b] 和 [b]idle[/b] 两种状态切换。本 mod 在此基础上扩展，让角色能根据更多游戏状态自动切换动画，并新增了前缀系统、问候动画、主角移动动画、武器战斗子键与静态战斗图。
 
-[h2]这个 mod 做什么[/h2]
+[h2]新增状态[/h2]
+
+在原版 combat / idle 的基础上，mod 会根据角色当前状态自动选择动画：
+
 [list]
-[*] 角色会按状态自动切动画：战斗、移动（仅主角）、问候、潮湿、醉酒、混乱、失明、待机
-[*] 主角（PCC）可用 Skin 目录里的动态贴图；创角 / 居民菜单可换肤
-[*] NPC 也可播 ACS；没有多帧战斗动画时，可用单帧静态战斗图
-[*] 可选按主手武器类型播不同战斗动画（剑 / 长柄 / 杖）
+[*] [b]combat[/b] - 战斗中（原版支持；可再拆 sword / polearm / staff）
+[*] [b]move[/b] - 仅主角移动时（资源名 _acs_move）
+[*] [b]greet[/b] - 见面问候：NPC 看见玩家时自动播放一次问候动画，播完自动回到 idle
+[*] [b]wet[/b] - 潮湿 / 曾在水中
+[*] [b]drunk[/b] - 醉酒
+[*] [b]confused[/b] - 混乱
+[*] [b]blind[/b] - 失明
+[*] [b]idle[/b] - 待机（默认，无需写出）
 [/list]
 
-[h2]安装[/h2]
-[olist]
-[*] 订阅 / 放入 Package 后确认目录类似：
-[code]Elin/Package/Mod_BetterCustomSprites/
-  BetterCustomSprites.dll
-  package.xml[/code]
-[*] [b]卸载原版 ACS[/b]
-[*] 启动游戏；换图后可用控制台 [b]ACS.ReloadAcs[/b] 热重载
-[/olist]
+状态优先级从高到低：
+[code]combat > move(PC) > greet(NPC) > wet > drunk > confused > blind > idle[/code]
 
-[h2]控制台（ReflexCLI）[/h2]
-[list]
-[*] [b]ACS.ListSkins[/b] — 列出 Skin
-[*] [b]ACS.SetSkin[/b] — 给主角设 skin
-[*] [b]ACS.ClearSkin[/b] — 清主角 skin
-[*] [b]ACS.ReloadAcs[/b] — 重载 ACS / 静态 combat 映射
-[/list]
+异常状态只在非战斗时生效，战斗中一定显示 combat 动画。
 
-[h2]资源放哪[/h2]
-与原版一致：游戏或其它 Package 的 [b]Skin[/b] 目录。
-命名示例：
-[code]pcr_xxx_acs_idle#66_0-3.png
-pcr_xxx_acs_move#41_0-14.png
-pcr_xxx_acs_combat#66_0-5.png
-pcr_xxx_bcs_combat.png[/code]
+[h2]命名格式[/h2]
 
-[h2]常见问题[/h2]
-[list]
-[*] 与原版 ACS 同时开 → 冲突，请只留本 mod
-[*] 换了没战斗动画的动态皮，战斗应保持当前皮外观，不再拉原皮 combat
-[*] 有多帧 [b]_acs_combat*[/b] 时优先动画；只有 [b]_bcs_combat[/b] 时用静态战斗图
-[*] 点地移动停住后应回 idle；若异常请反馈复现步骤
-[/list]
-
-[hr][/hr]
-
-[h1]给 Mod 作者 / 画师[/h1]
-
-[h2]ACS 命名[/h2]
 [code]_acs_{前缀}.{状态}#{帧间隔ms}_{起始帧}-{结束帧}[/code]
+
 [list]
-[*] 前缀可选：snow / married / 自定义 override
-[*] 状态：combat / move / greet / wet / drunk / confused / blind / idle（idle 可省略）
-[*] 例：_acs_combat#66_0-5 、_acs_snow.move#41_0-14
+[*] [b]前缀[/b]（可选）：任意皮肤名（手动） / snow（雪地） / married（已婚）
+[*] [b]状态[/b]：combat / move / greet / wet / drunk / confused / blind / idle（idle 无需写出）
 [/list]
 
-[h2]状态优先级[/h2]
-[code]combat > move(仅PC) > greet(仅NPC) > wet > drunk > confused > blind > idle[/code]
+[h3]举个例子[/h3]
 
-[h2]combat 武器子键（可选）[/h2]
-只看主手：
-[code]_acs_combat.sword / .polearm / .staff
-_acs_combat[/code]
-有前缀时：_acs_snow.combat.sword → _acs_snow.combat → 无前缀同上。
-单套战斗动画只放 [b]_acs_combat[/b] 即可。
+以 [b]pcr_zhenbu[/b] 为例：
+
+[code]
+pcr_zhenbu.png
+pcr_zhenbu_acs_combat#41_0-27.png
+pcr_zhenbu_acs_greet#41_0-38.png
+pcr_zhenbu_acs_yongzhuang#41_0-31.png
+pcr_zhenbu_acs_yongzhuang.combat#41_0-27.png
+pcr_zhenbu_acs_yongzhuang.greet#41_0-38.png
+[/code]
+
+[list]
+[*] [b]pcr_zhenbu.png[/b] - 角色基础外观
+[*] [b]pcr_zhenbu_acs_combat#41_0-27.png[/b] - 基础战斗动画
+[*] [b]pcr_zhenbu_acs_greet#41_0-38.png[/b] - 看见玩家时打招呼
+[*] [b]pcr_zhenbu_acs_yongzhuang#41_0-31.png[/b] - 泳装皮肤通用动画（前缀 yongzhuang）
+[*] [b]pcr_zhenbu_acs_yongzhuang.combat#41_0-27.png[/b] - 泳装战斗
+[*] [b]pcr_zhenbu_acs_yongzhuang.greet#41_0-38.png[/b] - 泳装打招呼
+[/list]
+
+通过 Drama 切换皮肤前缀示例：
+
+[code]
+eval tg.SetPortraitOverride("UN_pcr_zhenbu_yongzhuang")
+tg.mapStr.Set("acs_override", "yongzhuang")
+[/code]
+
+[list]
+[*] 第一行改头像（原版 API）
+[*] 第二行让 ACS 走 [b]yongzhuang[/b] 前缀，即 _acs_yongzhuang / _acs_yongzhuang.combat 等
+[/list]
 
 [h2]查找顺序[/h2]
-[olist]
-[*] _acs_{前缀}.{状态}
-[*] _acs_{前缀}（仅当 state=idle 时当通用片）
-[*] _acs_{状态}
-[*] 非 idle 缺片 → 回退 idle
-[/olist]
 
-[h2]静态 combat（_bcs_combat）[/h2]
-无多帧 combat ACS 时用单帧战斗图。
-优先级：
-[olist]
-[*] 原生 [b]{base}_bcs_combat.png[/b] → suffixes["_bcs_combat"]
-[*] 映射表 [b]Skin/bcs_static_map.ini[/b] 的 [combat]（仅补缺，不覆盖已有）
-[*] 都没有 → 无静态 combat
-[/olist]
+每一帧按以下顺序查找第一个存在的动画：
 
-映射表位置（可多份；Custom 优先）：
 [list]
-[*] Custom/Skin/bcs_static_map.ini
-[*] 已启用 Package 的 Skin/bcs_static_map.ini
-[*] 其它已加载 skin png 所在目录
+[*] 1. [b]_acs_{前缀}.{状态}[/b] - 最精确
+[*] 2. [b]_acs_{前缀}[/b] - 指定前缀的通用动画（视为 idle）
+[*] 3. [b]_acs_{状态}[/b] - 无前缀的指定状态
 [/list]
 
-格式（[b]单值 RHS[/b]，不要逗号多值）：
-[code][combat]
-baseSkinId=foreignSkinId[/code]
+非 idle 缺片时会回退到对应 idle，避免整段 ACS 失效。
+
+[h2]combat 武器子键（可选）[/h2]
+
+只看主手装备类型：
+
+[code]
+_acs_combat.sword
+_acs_combat.polearm
+_acs_combat.staff
+_acs_combat
+[/code]
+
+有前缀时：_acs_yongzhuang.combat.sword → _acs_yongzhuang.combat → 无前缀同上。
+只做一套战斗动画时，放 [b]_acs_combat[/b] 即可。
+
+[h2]静态战斗图（可选）[/h2]
+
+没有多帧 _acs_combat* 时，可用单帧静态战斗图：
+
 [list]
-[*] 无扩展名，与 dictSkins key 一致
-[*] 同一 base 多行只保留首次
-[*] 原生 _bcs_combat 永远优先于 map
-[*] 静态侧不按武器拆键；多武器代表图在 map 里显式写一张即可
+[*] 原生文件：[b]{base}_bcs_combat.png[/b]
+[*] 或映射表：Skin/bcs_static_map.ini 的 [combat]
 [/list]
 
-[h2]当前 base 权威（重要）[/h2]
-ACS / combat 只认 [b]当前装备的 base skin[/b]（c_idSpriteReplacer）。
-新皮没有 combat 时：保持当前皮 idle / 静态 / 底图，[b]不会[/b]回落到种族原皮或其它皮的 combat 动画。
+有多帧 combat ACS 时仍优先动画。
 
-[h2]兼容注意[/h2]
+[h2]当前 base 权威[/h2]
+
+换到没有 combat 的动态皮肤后，战斗时保持当前皮外观（idle / 静态 / 底图），[b]不会[/b]回落到原皮 combat。
+
+[h2]greet 问候动画说明[/h2]
+
 [list]
-[*] 不要与原版 Animated Custom Sprites 同开
-[*] loadPriority 默认 70；依赖 ListSkins 合并结果的兼容包请注意加载顺序
-[*] ACS.ReloadAcs 会刷新映射缓存并重新 ListSkins
-[*] MIT：基于 gottyduke/Elin.Plugins AnimatedCustomSprites
+[*] 当 NPC 触发 fov 对话气泡（看见玩家主动搭话）时，自动进入 greet
+[*] greet 播完一轮后自动结束，回到 idle
+[*] 没有 greet 资源时自动回退 idle，不会出错
+[*] 触发后约 0.2 秒延迟，避免瞬间切动画
 [/list]
 
-[h2]给玩家的一句话[/h2]
-放对 Skin 文件名即可；缺某状态会自动回退，不会整段失效。
+[h2]主角相关[/h2]
+
+[list]
+[*] 支持 PCC 使用 Skin 目录动态贴图
+[*] 创角面板 / 居民菜单可换肤
+[*] 仅主角有 [b]move[/b] 状态（_acs_move）
+[*] 控制台：ACS.ListSkins / ACS.SetSkin / ACS.ClearSkin / ACS.ReloadAcs
+[/list]
+
+[h2]原版说明[/h2]
+
+基于 [url=https://github.com/gottyduke/Elin.Plugins/tree/master/AnimatedCustomSprites]Animated Custom Sprites[/url] 修改，遵循 MIT 协议。
 
   </description>
 </Meta>
