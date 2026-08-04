@@ -41,6 +41,11 @@ internal class SkinListPatch
             NormalizeAcsSuffixes(entry.Value, entry.Key);
         }
 
+        // After native *_bcs_combat: optional Skin/bcs_static_map.ini [combat] fill-ins.
+        foreach (var mapped in StaticCombatMapApply.ApplyToDictSkins(__result)) {
+            staticCombatMerges.Add(new StaticCombatMerge(mapped.BaseId, mapped.Data));
+        }
+
         // _bcs_combat 仅写入 dictSkins[baseId]；NPC 的 sourceCard.replacer 由 Elin 单独 Reload
         // 创建，并非同一实例，所以合并不会自动覆盖。
         // 把结果广播给当前已加载且匹配的 NPC 运行时实例。
@@ -159,7 +164,8 @@ internal class SkinListPatch
             AcsMod.Warn($"BroadcastStaticCombatToCharaInstances: {ex.Message}");
         }
     }
-private static void MergeAcsSkinIntoBase(string acsSkinId, Dictionary<string, SpriteReplacer> dictSkins)
+
+    private static void MergeAcsSkinIntoBase(string acsSkinId, Dictionary<string, SpriteReplacer> dictSkins)
     {
         int acsIdx = acsSkinId.IndexOf("_acs_");
         if (acsIdx < 0) {
@@ -374,8 +380,9 @@ private static void MergeAcsSkinIntoBase(string acsSkinId, Dictionary<string, Sp
     }
 
     /// <summary>
-    /// 显示前：用文件名校正 frame/scale，并在切片缺失或长度不符时重切。
-    /// 解决「frame 已改但 sprites 仍是整条 strip」的残留状态。
+    /// ?????????? frame/scale????????????????
+    /// ???frame ??? sprites ???? strip???????
+    /// ???????? meta ???????????? path / ????
     /// </summary>
     internal static void EnsureAcsSprites(SpriteData data)
     {
@@ -383,12 +390,29 @@ private static void MergeAcsSkinIntoBase(string acsSkinId, Dictionary<string, Sp
             return;
         }
 
-        else {
-            // 已切片：仍补一次 Point（冷启动/原版 Load 可能是 Bilinear）
-            ApplyPointFilter(data);
+        // ?????????? meta ????????? Point ???????????
+        if (data.frame > 0
+            && data.scale == 100
+            && data.time > 0f
+            && data.sprites is { Length: > 0 } sprites
+            && sprites.Length == data.frame
+            && sprites[0] is not null) {
+            // ??????????????? strip?????
+            bool looksLikeUncutStrip = data.frame == 1
+                && sprites[0].texture is not null
+                && sprites[0].rect.width > sprites[0].texture.height * 1.5f;
+            if (!looksLikeUncutStrip) {
+                if (data.tex is not null && data.tex.filterMode != FilterMode.Point) {
+                    ApplyPointFilter(data);
+                }
+                return;
+            }
         }
+
         var clip = ResolveClipFromPath(data);
         if (clip is not { Length: > 0 }) {
+            // ??????????? Point??? Bilinear ??
+            ApplyPointFilter(data);
             return;
         }
 
@@ -407,7 +431,7 @@ private static void MergeAcsSkinIntoBase(string acsSkinId, Dictionary<string, Sp
             || data.sprites.Length == 0
             || data.sprites[0] is null;
 
-        // 额外：单帧但纹理宽明显是多格横条（frame 曾为 1 时切出的整条）
+        // ?????????????????frame ?? 1 ???????
         if (!needSlice && data.sprites is { Length: 1 } && data.sprites[0] is not null) {
             try {
                 var s0 = data.sprites[0];
@@ -424,7 +448,12 @@ private static void MergeAcsSkinIntoBase(string acsSkinId, Dictionary<string, Sp
         if (metaDirty || needSlice) {
             ForceReloadSprites(data);
         }
+        else {
+            ApplyPointFilter(data);
+        }
     }
+
+
 }
 
 /// <summary>
@@ -473,7 +502,7 @@ internal class ReloadSuffixPatch
 
     [HarmonyPostfix]
     [HarmonyPatch(typeof(SpriteReplacer), nameof(SpriteReplacer.Reload))]
-        internal static void OnReloadSuffixes(SpriteReplacer __instance, string id, RenderData renderData)
+    internal static void OnReloadSuffixes(SpriteReplacer __instance, string id, RenderData renderData)
     {
         // 无底图 PCC 种族仍可能在 dictModItems 有 _acs_ 贴图
         if (__instance.suffixes.Count == 0) {
@@ -509,36 +538,63 @@ internal class ReloadSuffixPatch
         SkinListPatch.NormalizeAcsSuffixes(__instance, id);
         TryInjectStaticCombatFromDictSkins(__instance, id);
         TryMergeBcsCombatOnReload(__instance, id);
-    }    private static void TryMergeBcsCombatOnReload(SpriteReplacer replacer, string id)
+    }
+
+    private static void TryMergeBcsCombatOnReload(SpriteReplacer replacer, string id)
     {
         try {
             if (replacer?.suffixes is null || id.IsEmpty()) {
                 return;
             }
 
-            // 已存在则跳过
+            // ??????
             if (replacer.suffixes.TryGetValue(PcSkinPatch.StaticCombatSuffix, out var existing)
                 && existing is not null) {
                 return;
             }
 
-            string combatSkinId = id + PcSkinPatch.StaticCombatSuffix;
-            if (!SpriteReplacer.dictSkins.TryGetValue(combatSkinId, out var combatSkin)) {
-                return;
+            // ListSkins ?? *_bcs_combat ??? base ? Remove ?? key?
+            // ????? dictSkins[id] ???? key ????????
+            SpriteData? combatData = null;
+            string? source = null;
+
+            if (SpriteReplacer.dictSkins.TryGetValue(id, out var baseSkin)
+                && !ReferenceEquals(baseSkin, replacer)
+                && baseSkin.suffixes is not null
+                && baseSkin.suffixes.TryGetValue(PcSkinPatch.StaticCombatSuffix, out combatData)
+                && combatData is not null) {
+                source = id;
             }
 
-            var combatData = combatSkin.data;
             if (combatData is null) {
+                string combatSkinId = id + PcSkinPatch.StaticCombatSuffix;
+                if (SpriteReplacer.dictSkins.TryGetValue(combatSkinId, out var combatSkin)) {
+                    combatData = combatSkin.data;
+                    if (combatData is null
+                        && combatSkin.suffixes is not null
+                        && combatSkin.suffixes.TryGetValue("", out var raw)
+                        && raw is not null) {
+                        combatData = raw;
+                    }
+
+                    if (combatData is not null) {
+                        source = combatSkinId;
+                    }
+                }
+            }
+
+            if (combatData is null || source is null) {
                 return;
             }
 
             replacer.suffixes[PcSkinPatch.StaticCombatSuffix] = combatData;
-            AcsMod.Log($"skin '{id}' static combat merged on Reload (from {combatSkinId})");
+            AcsMod.Log($"skin '{id}' static combat merged on Reload (from {source})");
         }
         catch (Exception ex) {
             AcsMod.Warn($"TryMergeBcsCombatOnReload: {ex.Message}");
         }
     }
+
 
     /// <summary>
     /// 从 <c>SpriteReplacer.dictSkins[id]</c> 取 _bcs_combat 注入当前 Reload 出的实例。

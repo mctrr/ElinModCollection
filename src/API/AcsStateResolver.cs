@@ -1,5 +1,6 @@
-﻿namespace ACS.API;
+namespace ACS.API;
 
+using System.Collections.Generic;
 using UnityEngine;
 
 public static class AcsStateResolver
@@ -23,6 +24,9 @@ public static class AcsStateResolver
     private const int SkillSword = 101;
     private const int SkillStaff = 103;
     private const int SkillPolearm = 106;
+
+    // ?? combat ?????Equip/Unequip ????? combat ??? body/category
+    private static readonly Dictionary<int, string?> MainHandCombatWeaponKeyByUid = new();
 
     /// <summary>
     /// 基础状态优先级：战斗 > 移动(仅 PC) > greet(NPC) > 异常 > idle
@@ -90,8 +94,9 @@ public static class AcsStateResolver
     }
 
     /// <summary>
-    /// combat 资源子键：仅看主手装备类型（不看本次攻击方式）。
-    /// 返回 <c>sword</c> / <c>polearm</c> / <c>staff</c>；无专用映射返回 null（用通用 _acs_combat）。
+    /// combat ????????????????????????
+    /// ?? <c>sword</c> / <c>polearm</c> / <c>staff</c>???????? null???? _acs_combat??
+    /// ??? chara.uid ???Equip/Unequip ????
     /// </summary>
     public static string? GetMainHandCombatWeaponKey(Chara chara)
     {
@@ -99,6 +104,44 @@ public static class AcsStateResolver
             return null;
         }
 
+        int uid = chara.uid;
+        if (MainHandCombatWeaponKeyByUid.TryGetValue(uid, out string? cached)) {
+            return cached;
+        }
+
+        string? key = ComputeMainHandCombatWeaponKey(chara);
+        MainHandCombatWeaponKeyByUid[uid] = key;
+        return key;
+    }
+
+    /// <summary>??????????? null????/?????</summary>
+    public static void RefreshMainHandCombatWeaponKey(Chara chara)
+    {
+        if (chara is null) {
+            return;
+        }
+
+        MainHandCombatWeaponKeyByUid[chara.uid] = ComputeMainHandCombatWeaponKey(chara);
+    }
+
+    /// <summary>??????????????????</summary>
+    public static void InvalidateMainHandCombatWeaponKey(Chara chara)
+    {
+        if (chara is null) {
+            return;
+        }
+
+        MainHandCombatWeaponKeyByUid.Remove(chara.uid);
+    }
+
+    /// <summary>?? ACS / ??????</summary>
+    public static void ClearMainHandCombatWeaponKeyCache()
+    {
+        MainHandCombatWeaponKeyByUid.Clear();
+    }
+
+    private static string? ComputeMainHandCombatWeaponKey(Chara chara)
+    {
         try {
             Thing? w = chara.body?.slotMainHand?.thing;
             if (w is null) {
@@ -110,7 +153,7 @@ public static class AcsStateResolver
                 return null;
             }
 
-            // skill 与原版武器熟练一致，优先
+            // skill ????????????
             switch (cat.skill) {
                 case SkillSword:
                     return "sword";
@@ -120,7 +163,7 @@ public static class AcsStateResolver
                     return "staff";
             }
 
-            // 兜底：分类树（部分模组/数据 skill 异常时）
+            // ???????????/?? skill ????
             if (cat.IsChildOf("sword")) {
                 return "sword";
             }
@@ -134,7 +177,7 @@ public static class AcsStateResolver
             }
         }
         catch {
-            // 主菜单 / body 未就绪
+            // ??? / body ???
         }
 
         return null;
@@ -160,9 +203,11 @@ public static class AcsStateResolver
         chara?.mapStr.Remove(CombatFlagKey);
     }
 
-    /// <summary>控制台重载等：清 PC 主动战斗标记。</summary>
+    /// <summary>???????? PC ????????? combat ?????</summary>
     public static void ClearHostileScanCache()
     {
+        ClearMainHandCombatWeaponKeyCache();
+
         try {
             var pc = EClass.pc;
             if (pc != null) {
@@ -254,8 +299,9 @@ public static class AcsStateResolver
     /// PC 是否应播 move ACS。
     /// 仅看 CharaRenderer.isMoving 会在格子衔接瞬间变 false，长按 WASD 会闪 idle。
     /// 近点/按住：GoalManualMove；键位：EInput.axis（勿 ConvertAxis）。
-    /// 远点 AI_Goto：HasPath(state==PathReady 且 nodes≥1) 且 nodeIndex 仍有效且未到 dest。
-    /// 勿用裸 DestDist/裸 HasPath：容差与取消后残留 path 都会粘死 move。
+    /// 远点 AI_Goto：目标未到达就保持 move（跨格 repath 时 path.HasPath 会空一拍，
+    /// 不能只靠 HasPath；也绝不能 ai is AI_Goto 一律 true——到站后 AI 换掉前会粘 move）。
+    /// 不要用 idleTimer / 裸 nextMove / 裸 path：停步后残留会一直播 move。
     /// </summary>
     public static bool IsPcMoving(Chara chara)
     {
@@ -272,26 +318,33 @@ public static class AcsStateResolver
             return true;
         }
 
-        // 远点：仅在仍跑 AI_Goto 时认 path（Cancel 后 state/nodes 可能残留，勿裸 HasPath）
-        // nodeIndex 与 TryGoTo 一致：&lt;0 视为路径耗尽/应取消，不算移动
-        // IsDestinationReached = Distance(pos,destPoint) &lt;= destDist（点地 ctor destDist=0）
-        if (chara.ai is not AI_Goto) {
-            return false;
-        }
-
-        try {
-            PathProgress path = chara.path;
-            if (path is not null
-                && path.HasPath
-                && path.nodes is not null
-                && path.nodeIndex >= 0
-                && path.nodeIndex < path.nodes.Count
-                && !path.IsDestinationReached(chara.pos)) {
-                return true;
+        // 远点：AI_Goto 且尚未到站 = 寻路/迈步/repath 全过程。
+        // 到站后 IsDestinationReached 为 true，即使 ai 尚未换掉也不再播 move。
+        if (chara.ai is AI_Goto gotoAi) {
+            try {
+                if (!gotoAi.IsDestinationReached()) {
+                    return true;
+                }
             }
-        }
-        catch {
-            // 主菜单 / 地图未就绪
+            catch {
+                // 主菜单 / dest 未就绪
+            }
+
+            // 极少：到站判定异常时仍用有效 path 兜底（仍限制在 AI_Goto 内，避免残留 path 粘死）
+            try {
+                PathProgress path = chara.path;
+                if (path is not null
+                    && path.HasPath
+                    && path.nodes is not null
+                    && path.nodeIndex >= 0
+                    && path.nodeIndex < path.nodes.Count
+                    && !path.IsDestinationReached(chara.pos)) {
+                    return true;
+                }
+            }
+            catch {
+                // 主菜单 / 地图未就绪
+            }
         }
 
         return false;

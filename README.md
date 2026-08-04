@@ -94,6 +94,43 @@ _acs_combat                             ← 通用 / 单套 / 其它武器兜底
 
 拟态等特殊情况会跳过 ACS 覆盖，避免与 PCC 冲突。
 
+
+---
+
+## 静态 Combat Skin
+
+战斗时可用**单帧静态图**替换外观（无多帧 ACS combat 时生效；有 `_acs_combat*` 动画时仍优先动画）。
+
+### 优先级
+
+1. 规范文件：`{base}_bcs_combat.png`（加载时合并进 base 的 `suffixes["_bcs_combat"]`）
+2. 映射表：`Skin/bcs_static_map.ini` 的 `[combat]`（仅当该 base 还没有 `_bcs_combat`）
+3. 都没有 → 无静态 combat
+
+### 映射表（兼容其它 mod 命名）
+
+把文件放在下列任一位置（可同时存在；同一 base 以**先解析到的**为准，Custom 优先）：
+
+- **Custom/Skin/bcs_static_map.ini**
+- **已启用 Package 的 Skin/bcs_static_map.ini**（纯 ini 兼容包也行，不必带 png）
+- 其它已加载 skin png 所在目录下的同名 ini
+
+```ini
+[combat]
+baseSkinId=foreignSkinId
+; 预留（当前忽略，以后可扩展）:
+; [snow]
+; [wet]
+```
+
+- `baseSkinId` / `foreignSkinId`：无扩展名，与 `dictSkins` 的 key 一致（png 文件名去掉 `.png`）
+- 同一 base 多行：保留首次，其余跳过并打日志
+- 无 base 底图时：用 foreign 图登记 base，并挂上 `_bcs_combat`（换肤列表可见）
+- 有 base 时：只写入 `_bcs_combat`，**不删除** foreign 独立 skin 条目
+- 持武多套图：在 map 里显式指定**一张**代表图即可（静态侧不按武器拆键）
+
+`ACS.ReloadAcs` 会失效映射缓存并重新 `ListSkins`。
+
 ---
 
 ## 仓库结构
@@ -114,12 +151,14 @@ BetterCustomSprites/
    ├─ API/
    │  ├─ AcsApi.cs            # AcsClip 解析 + AcsController 选片
    │  ├─ AcsStateResolver.cs  # 状态 / 前缀 / combat·greet 标记
-   │  └─ AcsSuffixes.cs       # suffixes 查询与 Resolve
+   │  ├─ AcsSuffixes.cs       # suffixes 查询与 Resolve
+   │  └─ StaticCombatMap.cs  # Skin/bcs_static_map.ini [combat]
    └─ Patches/
       ├─ RenderFramePatch.cs  # NPC：CardActor 帧 → ACS clip
       ├─ PccRenderPatch.cs    # PC：CharaActorPCC 上 ACS 覆盖
       ├─ AcsSpritePresenter.cs# 缩放约定、底边对齐、bottom-pivot
       ├─ SkinLoadPatches.cs   # ListSkins / Reload / ACS 后缀规范化
+      ├─ StaticCombatMapApply.cs # apply map -> _bcs_combat
       ├─ PcSkinSupport.cs     # PC 绑 skin、创角/菜单换肤、命令
       └─ StatePatches.cs      # combat 粘滞 + greet 触发
 ```

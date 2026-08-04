@@ -435,6 +435,7 @@ internal static class PcSkinCommands
             AcsSpritePresenter.ClearCaches();
             PccRenderPatch.ClearRuntimeCaches();
             AcsStateResolver.ClearHostileScanCache();
+            ACS.API.StaticCombatMap.Invalidate();
 
             SpriteReplacer.ListSkins();
             PcSkinBinder.Ensure("ReloadAcs", forceListSkins: false);

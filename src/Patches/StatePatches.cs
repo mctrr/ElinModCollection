@@ -60,8 +60,8 @@ internal class CombatPatch
     }
 
     /// <summary>
-    /// 主手装上/换成武器：开 5 回合 combat。
-    /// 卸下主手（变空）不播 combat；换防具等主手未变也不触发。
+    /// Main-hand equip/swap: refresh combat weapon-key cache; PC also opens 5-turn combat window.
+    /// Empty main hand does not open combat; non-main-hand equip does not either.
     /// </summary>
     [HarmonyPrefix]
     [HarmonyPatch(typeof(CharaBody), nameof(CharaBody.Equip))]
@@ -74,16 +74,56 @@ internal class CombatPatch
     [HarmonyPatch(typeof(CharaBody), nameof(CharaBody.Equip))]
     internal static void OnEquipPostfix(CharaBody __instance, Thing? __state)
     {
-        if (__instance?.owner is not Chara chara || !chara.IsPC) {
+        if (__instance?.owner is not Chara chara) {
             return;
         }
 
         Thing? mainHandAfter = __instance.slotMainHand?.thing;
+        if (!ReferenceEquals(__state, mainHandAfter)) {
+            AcsStateResolver.RefreshMainHandCombatWeaponKey(chara);
+        }
+
+        // PC active combat window: only when main hand becomes a different non-null thing
+        if (!chara.IsPC) {
+            return;
+        }
+
         if (mainHandAfter is null || ReferenceEquals(__state, mainHandAfter)) {
             return;
         }
 
         AcsStateResolver.MarkActiveCombat(chara);
+    }
+
+    /// <summary>Refresh main-hand combat weapon key after unequip (null if empty).</summary>
+    [HarmonyPostfix]
+    [HarmonyPatch(typeof(CharaBody), nameof(CharaBody.Unequip), new[] { typeof(Thing), typeof(bool) })]
+    internal static void OnUnequipThing(CharaBody __instance)
+    {
+        RefreshMainHandCombatWeaponKey(__instance);
+    }
+
+    [HarmonyPostfix]
+    [HarmonyPatch(typeof(CharaBody), nameof(CharaBody.Unequip), new[] { typeof(BodySlot), typeof(bool) })]
+    internal static void OnUnequipSlot(CharaBody __instance)
+    {
+        RefreshMainHandCombatWeaponKey(__instance);
+    }
+
+    [HarmonyPostfix]
+    [HarmonyPatch(typeof(CharaBody), nameof(CharaBody.UnequipAll))]
+    internal static void OnUnequipAll(CharaBody __instance)
+    {
+        RefreshMainHandCombatWeaponKey(__instance);
+    }
+
+    private static void RefreshMainHandCombatWeaponKey(CharaBody? body)
+    {
+        if (body?.owner is not Chara chara) {
+            return;
+        }
+
+        AcsStateResolver.RefreshMainHandCombatWeaponKey(chara);
     }
 
     /// <summary>
