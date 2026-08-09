@@ -5,10 +5,7 @@
 # Local research / decompile dumps / helper scripts (not mod content)
 .research/
 .tools/
-.tmp_*/
-.tmp_decomp/
-.tmp_decomp_full/
-.tmp_dump/
+.tmp_*
 _elinmeta/
 --force/
 .agents/
