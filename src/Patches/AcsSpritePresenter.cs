@@ -35,6 +35,7 @@ internal static class AcsSpritePresenter
         CenterLiftCache.Clear();
         BottomPaddingCache.Clear();
         BottomPivotCache.Clear();
+        AcsClipIni.ClearCaches();
     }
 
     /// <summary>

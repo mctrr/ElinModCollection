@@ -5,9 +5,8 @@
 > 基于 [gottyduke/Elin.Plugins](https://github.com/gottyduke/Elin.Plugins) 中的 AnimatedCustomSprites，MIT 协议。  
 > 仓库：https://github.com/mctrr/BetterCustomSprites
 
-**请卸载原版 Animated Custom Sprites**，否则会冲突。
 
-当前版本：`2.3.0`（`mctrr.bettercustomsprites`）
+当前版本：`2.4.0`（`mctrr.bettercustomsprites`）
 
 ---
 
@@ -15,10 +14,10 @@
 
 | 能力 | 说明 |
 |------|------|
-| 状态动画 | combat / move(PC) / greet / wet / drunk / confused / blind / idle |
+| 状态动画 | revive / mcombat / combat / move(PC) / greet(greet1-4) / eat / wet / drunk / confused / blind / idle |
 | 前缀 | `snow`、`married`、`acs_override` 等与状态组合 |
-| 主角 Skin | PCC 可使用 Package/Skin 动态贴图；创角与居民菜单可打开原版换肤 UI |
-| NPC ACS | 非 PCC 角色走原版 `CardActor` 帧替换管线 |
+| 主角 Skin | PCC 可用 Skin / Texture 根目录贴图；创角与居民菜单可打开换肤 UI |
+| NPC 换肤 | 居民菜单可给 NPC 换肤；自定义皮肤会播 ACS，不再停在静态底图 |
 
 ---
 
@@ -45,16 +44,19 @@ _acs_{前缀}.{状态}#{帧间隔ms}_{起始帧}-{结束帧}
 
 | 优先级 | 状态 | 条件 | 备注 |
 |--------|------|------|------|
-| 1 | `combat` | 战斗 / 主动窗口 | PC：攻击或**装备主手**粘滞 5 回合（卸下不播）；可按主手拆 `combat.sword` 等 |
-| 2 | `move` | **仅 PC** 移动中 | 资源名 `_acs_move` |
-| 3 | `greet` | **仅 NPC** 见面问候 | 播完一轮回 idle |
-| 4 | `wet` | 潮湿 / 曾在水中 | |
-| 5 | `drunk` | 醉酒 | |
-| 6 | `confused` | 混乱 | |
-| 7 | `blind` | 失明 | |
-| 8 | `idle` | 默认 | 文件名可省略状态 |
+| 1 | `revive` | **被复活**（`Chara.Revive` 真正从死亡复活） | PC/NPC 通用；一次性动作，播完一轮回其它状态 |
+| 2 | `mcombat` | **施放敌对法术**（魔法攻击）后粘滞 5 回合 | PC/NPC 通用；优先级高于 `combat`；缺 `_acs_mcombat` 片回退 combat |
+| 3 | `combat` | 战斗 / 主动窗口 | PC：攻击或**装备主手**粘滞 5 回合（卸下不播）；可按主手拆 `combat.sword` 等 |
+| 4 | `move` | **仅 PC** 移动中 | 资源名 `_acs_move` |
+| 5 | `greet` / `greet1`-`greet4` | **仅 NPC** 见面问候 | 触发时在已有的 `greet` / `greet1`-`greet4` 中随机锁一张；播完一轮回 idle |
+| 6 | `eat` | 进食中（PC/NPC） | 自动检测 `AI_Eat` 吃进度；循环播放，吃完/取消自动回 idle |
+| 7 | `wet` | 潮湿 / 曾在水中 | |
+| 8 | `drunk` | 醉酒 | |
+| 9 | `confused` | 混乱 | |
+| 10 | `blind` | 失明 | |
+| 11 | `idle` | 默认 | 文件名可省略状态 |
 
-异常状态只在非战斗时生效；战斗中固定 `combat`。
+异常状态只在非战斗时生效；战斗中固定 `combat`（施法窗口则固定 `mcombat`）。
 
 ### 查找顺序
 
@@ -77,20 +79,65 @@ _acs_combat                             ← 通用 / 单套 / 其它武器兜底
 
 非 idle 缺片时会回退到对应 idle，避免整段 ACS 失效。
 
+### mcombat（魔法攻击）
+
+- 施放**敌对法术**（`Spell` 且原版 `abilityType` 为 attack/debuff/dot，即打敌人的魔法）后，
+  combat 状态被 `mcombat` 覆盖 **5 回合**：优先播 `_acs_mcombat`，优先级高于 `_acs_combat`
+- 判定走原版统一施法入口 `Chara.UseAbility(Act,…)`，PC（法术栏 / 快捷键）与 NPC（战斗 AI）都生效；
+  治疗 / 增益 / 位移等非攻击法术**不**触发
+- 持续施法会续期；停止施法 5 回合后自动回落到普通 `combat`（战斗中）或 `idle`
+- 资源命名：`_acs_mcombat#66_0-5`；前缀同样支持（`_acs_snow.mcombat`、`_acs_married.mcombat`）；
+  缺 `_acs_mcombat` 片时按 `_acs_combat` 选片回退（含主手武器子键）
+- 测试 / 强制：`AcsStateResolver.ForceMagicCombat / ClearMagicCombat`
+- PC 施法朝向：敌对法术成功后按目标相对格子的屏幕水平方向转身（右上/右下朝右，左上/左下朝左；纯上下不改）。ACS 不读原版 `angle`（等距 W 会误翻），所以单独锁朝向；键盘 A/D 仍优先，`mcombat` 窗口结束自动清除
+
+### revive
+
+- **判定**：Harmony 补丁打在原版 `Chara.Revive(Point, bool)`。Prefix 记下调用前 `isDead`，Postfix 仅当「调用前已死、调用后活着」才 `StartRevive`
+- 因此会覆盖所有真正复活入口（居民复活、`GetRevived`、区域自动复活、PC 死亡后爬起等），**不会**对活人空调用 `Revive` 误触发
+- 一次性动作，优先级最高（压过 `mcombat` / `combat` / `move`）；播完最后一帧停在末帧并清标记，不绕回第 0 帧
+- 资源命名：`_acs_revive#66_0-5`；前缀同样支持（`_acs_snow.revive`、`_acs_married.revive`）
+- 无 revive 资源则立刻清标记并回退其它状态，不会卡住
+
 ### greet
 
 - NPC 触发 `TalkTopic("fov")`（看见玩家气泡）后延迟约 0.2s 进入 greet
+- 触发时在当前皮肤实际存在的 `_acs_greet` / `_acs_greet1` … `_acs_greet4` 中随机锁一张，播完前不会换片
 - 播完一轮自动清除；无 greet 资源则回退 idle
+
+### eat
+
+- 自动检测原版 `AI_Eat` 的「吃」进度子行为：`ai is AI_Eat` + 当前子行为是进度（`AIProgress`）+ 手持食物
+- 做菜 / 去餐桌阶段不会误触（做菜时食物在灶上 `held` 为空；走路是 `AI_Goto`）
+- 吃完 / 吃撑取消 / 被打断（移动、受伤）→ 进度结束，下一帧自动回 idle，无需手动 `StopEat`
+- 资源命名：`_acs_eat#66_0-5`；前缀同样支持（`_acs_snow.eat`、`_acs_married.eat`）
+- 手动 override（测试 / 外部调用）：`AcsStateResolver.StartEat / StopEat / IsEatActive`
+- 全身 ACS 叠在 PCC 脚底锚点上，原版手持点会落在脚边。可在同名 `.ini` 里加像素偏移（100 ppu，朝右时 `heldX` 自动镜像）：
+
+```ini
+frame=8
+time=0.041
+scale=100
+heldX=0
+heldY=40
+```
+
+  `heldY=40` 大约上移 40 像素。改完后控制台 `ACS.ReloadAcs` 即可，不必重开游戏。原版只认 `frame` / `time` / `scale`；`heldX` / `heldY` 是本 mod 扩展，加载时会保留，不会被覆盖。
+
 
 ---
 
-## 主角动态 Skin
+## 主角 / NPC 动态 Skin
 
-- Skin 文件放在游戏 / Mod 的 **Skin** 目录（与原版一致）
+- 文件可放在游戏 / Mod 的 **Skin** 目录（与原版一致）
+- 也可放在 **Texture 根目录** 或 `Texture/Skin`（不递归 `Texture/Item` 等子树，避免把物品图扫进换肤列表）
 - 支持 `基础名_acs_idle#…` 等形式；加载时会合并进基础 skin 的 suffixes
 - **创建角色**面板底部有「更换贴图」入口（原版 `LayerEditSkin`）
-- **居民列表**右键菜单对 PC 也可换肤
-- 控制台（ReflexCLI）提供 `ACS.SetSkin` 等命令（见 `PcSkinSupport`）
+- 换肤窗口默认只列 Skin 目录；底部开关打开后才显示 Texture 贴图（列表虚拟滚动，可见项才加载 PNG）
+- Texture 来源会在名字后标 mod 名 / Custom，方便区分
+- **居民列表**右键：PC、PCC NPC、以及原版已支持的非 PCC NPC 都可换肤
+- NPC 手动换肤后会走自定义皮肤的 ACS（战斗 / greet / idle 等），不再只显示静态底图
+- 控制台（ReflexCLI）：`ACS.SetSkin` / `ACS.ClearSkin` / `ACS.ListSkins` / `ACS.ReloadAcs`
 
 拟态等特殊情况会跳过 ACS 覆盖，避免与 PCC 冲突。
 
@@ -160,7 +207,7 @@ BetterCustomSprites/
       ├─ SkinLoadPatches.cs   # ListSkins / Reload / ACS 后缀规范化
       ├─ StaticCombatMapApply.cs # apply map -> _bcs_combat
       ├─ PcSkinSupport.cs     # PC 绑 skin、创角/菜单换肤、命令
-      └─ StatePatches.cs      # combat 粘滞 + greet 触发
+      └─ StatePatches.cs      # combat 粘滞 + greet 触发 + revive
 ```
 
 本地目录（**不提交**，见 `.gitignore`）：
@@ -219,8 +266,7 @@ ElinGamePath/Package/Mod_BetterCustomSprites/
 
 （若你使用 BepInEx plugins 布局，按自己的加载方式放置，并保证 `package.xml` 的 id 与 GUID 一致。）
 
-3. **卸载原版 ACS** 后启动游戏  
-
+3. 启动游戏
 ---
 
 ## 许可证

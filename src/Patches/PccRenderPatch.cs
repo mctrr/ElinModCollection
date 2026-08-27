@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using ACS.API;
 using HarmonyLib;
@@ -92,6 +92,8 @@ internal class PccRenderPatch
         else {
             SpriteTimerRef(__instance) = 0f;
             SpriteIndexRef(__instance) = 0;
+            // 单帧 revive / greet 也要清一次性标记，否则会粘死
+            AcsStateResolver.StopOneShotIfLastFrame(owner, data.frame, 0);
         }
         ApplyAcsSprite(__instance, data, p);
         // ACS 身体是 SpriteRenderer，可能盖住 mesh 手持物；在 ACS 之后再画一次手持
@@ -198,13 +200,7 @@ internal class PccRenderPatch
                 st.Timer += Core.delta;
                 if (st.Timer >= data.time) {
                     st.Timer -= data.time;
-                    st.Index++;
-                    if (st.Index >= data.frame) {
-                        st.Index = 0;
-                    }
-                    if (AcsStateResolver.IsGreetActive(owner) && data.frame > 0 && st.Index >= data.frame - 1) {
-                        AcsStateResolver.StopGreet(owner);
-                    }
+                    st.Index = AcsStateResolver.AdvanceClipIndex(owner, data.frame, st.Index);
                 }
             }
         }
@@ -335,6 +331,7 @@ internal class PccRenderPatch
     /// 左右朝向（贴图默认朝左：flip=false 左，true 右）：
     /// PC 键盘：只认 EInput.axis.x（勿 ConvertAxis）。A/D 更新；纯 W/S 粘滞。
     /// PC 点地：无键时用「当前一步」的屏幕水平分量（等距 screenX∝mapX+mapZ），纯屏竖步粘滞。
+    /// PC 施法：mcombat 窗口内朝向目标屏幕水平方向（原版 LookAt 改 angle，PC ACS 不读 angle）。
     /// PC 绝不用 angle（等距 W≈NE 会误改朝向）。
     /// NPC：angle 8 扇区；纯 N/S 粘滞。
     /// 必须按 actor 分状态，禁止全局 lastFlip。
@@ -358,7 +355,14 @@ internal class PccRenderPatch
                 return lastFlip;
             }
 
-            // 3) 无键：点地/寻路当前一步转头（迷宫拐弯随 movePoint 更新）
+            // 3) 施法窗口：朝向目标的屏幕水平方向（原版 LookAt 改了 angle，PC ACS 不读 angle）
+            if (AcsStateResolver.TryGetMagicFaceRight(owner, out bool magicRight)) {
+                lastFlip = magicRight;
+                FlipByActor[key] = lastFlip;
+                return lastFlip;
+            }
+
+            // 4) 无键：点地/寻路当前一步转头（迷宫拐弯随 movePoint 更新）
             if (TryFlipFromClickStep(owner, ref lastFlip)) {
                 FlipByActor[key] = lastFlip;
             }
@@ -489,7 +493,38 @@ internal class PccRenderPatch
     /// <summary>
     /// ACS 覆盖后只重绘「工具类」手持物；装备武器（含战斗时）一律不画，
     /// 避免盖住/干扰 _acs_combat 动态贴图。
+    /// ACS 全身图叠在 PCC 脚底锚点上，原版 heldPos 会落在脚边。
+    /// clip .ini 的 heldX/heldY 是 100 ppu 像素偏移，叠在原版 heldPos 上。
     /// </summary>
+    [HarmonyPrefix]
+    [HarmonyPatch(typeof(CharaRenderer), nameof(CharaRenderer.DrawHeld))]
+    internal static void OnDrawHeldPrefix(CharaRenderer __instance)
+    {
+        try {
+            var owner = __instance.owner;
+            if (owner is null || owner.held is null) {
+                return;
+            }
+
+            var suffixes = AcsSuffixes.Resolve(owner);
+            if (suffixes is null) {
+                return;
+            }
+
+            bool snow = EClass.core.IsGameStarted && EClass._zone is not null && EClass._zone.IsSnowCovered;
+            var clip = owner.GetAcsClip(snow, suffixes);
+            if (!AcsClipIni.TryGetHeldOffset(clip, out Vector2 off)) {
+                return;
+            }
+
+            float x = owner.flipX ? -off.x : off.x;
+            RenderObject.currentParam.x += x;
+            RenderObject.currentParam.y += off.y;
+        }
+        catch (Exception) {
+        }
+    }
+
     private static void DrawHeldInFront(CharaActorPCC actor, RenderParam p, Chara owner)
     {
         try {

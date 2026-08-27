@@ -18,11 +18,48 @@ internal class PcSkinPatch
 
     private static int _lastListSkinsFrame = -999;
 
+    [HarmonyPrefix]
+    [HarmonyPatch(typeof(CharaRenderer), nameof(CharaRenderer.SetOwner))]
+    internal static void OnSetOwnerPrefix(CharaRenderer __instance, Card c, out string? __state)
+    {
+        __state = null;
+        if (c is not Chara chara || chara.c_idSpriteReplacer.IsEmpty()) {
+            return;
+        }
+
+        string id = NormalizeSkinId(chara.c_idSpriteReplacer);
+        if (!id.IsEmpty() && id != chara.c_idSpriteReplacer) {
+            chara.c_idSpriteReplacer = id;
+        }
+
+        var skin = TextureSkinCatalog.EnsureSkin(chara.c_idSpriteReplacer) ?? ResolveSkin(chara.c_idSpriteReplacer);
+        PrepareSkinSprite(skin);
+
+        // ACS override keeps race RenderData and only swaps the sprite.
+        // Vanilla LayerEditSkin would switch to chara_custom_128/256 here and sink.
+        if (__instance.pccData is null) {
+            __state = chara.c_idSpriteReplacer;
+            chara.c_idSpriteReplacer = null;
+        }
+    }
+
     [HarmonyPostfix]
     [HarmonyPatch(typeof(CharaRenderer), nameof(CharaRenderer.SetOwner))]
-    internal static void OnSetOwner(CharaRenderer __instance, Card c)
+    internal static void OnSetOwner(CharaRenderer __instance, Card c, string? __state)
     {
+        RestoreSpriteReplacerId(c, __state);
         TryApplyPcSkin(__instance);
+        BindNpcCustomSkin(__instance);
+    }
+
+    [HarmonyFinalizer]
+    [HarmonyPatch(typeof(CharaRenderer), nameof(CharaRenderer.SetOwner))]
+    internal static Exception? OnSetOwnerFinalizer(CharaRenderer __instance, Card c, string? __state, Exception? __exception)
+    {
+        RestoreSpriteReplacerId(c, __state);
+        TryApplyPcSkin(__instance);
+        BindNpcCustomSkin(__instance);
+        return __exception;
     }
 
     [HarmonyPostfix]
@@ -30,6 +67,7 @@ internal class PcSkinPatch
     internal static void OnEnterScreen(CharaRenderer __instance)
     {
         TryApplyPcSkin(__instance);
+        BindNpcCustomSkin(__instance);
     }
 
     /// <summary>
@@ -41,9 +79,11 @@ internal class PcSkinPatch
     {
         if (__result is CharaRenderer cr) {
             TryApplyPcSkin(cr);
+            BindNpcCustomSkin(cr);
         }
         else if (__instance.renderer is CharaRenderer cr2) {
             TryApplyPcSkin(cr2);
+            BindNpcCustomSkin(cr2);
         }
     }
 
@@ -95,6 +135,76 @@ internal class PcSkinPatch
 
         // 只绑 spriteReplacer，保留 pccData / PCC actor；ACS 或静态图由 PccRenderPatch 叠
         owner.spriteReplacer = skin;
+    }
+
+    /// <summary>
+    /// Non-PCC custom skins keep the race RenderData offset, same as ACS override.
+    /// Only bind spriteReplacer; do not switch to chara_custom_128/256.
+    /// </summary>
+    internal static void BindNpcCustomSkin(CharaRenderer renderer)
+    {
+        if (renderer is null || renderer.pccData is not null) {
+            return;
+        }
+
+        var owner = renderer.owner;
+        if (owner is null || owner.mimicry != null || owner.c_idSpriteReplacer.IsEmpty()) {
+            return;
+        }
+
+        string id = NormalizeSkinId(owner.c_idSpriteReplacer);
+        if (id.IsEmpty()) {
+            return;
+        }
+
+        if (id != owner.c_idSpriteReplacer) {
+            owner.c_idSpriteReplacer = id;
+        }
+
+        var skin = ResolveSkin(id);
+        if (skin is null || !HasUsableSkin(skin)) {
+            return;
+        }
+
+        owner.spriteReplacer = skin;
+        var race = owner.sourceCard?.renderData ?? owner.source?.renderData;
+        if (race is null) {
+            return;
+        }
+
+        renderer.data = race;
+        renderer.usePass = false;
+    }
+
+    private static void RestoreSpriteReplacerId(Card c, string? id)
+    {
+        if (id.IsEmpty() || c is not Chara chara) {
+            return;
+        }
+
+        chara.c_idSpriteReplacer = id;
+    }
+
+    private static void PrepareSkinSprite(SpriteReplacer? skin)
+    {
+        if (skin?.data is null || skin.data.path.IsEmpty()) {
+            return;
+        }
+
+        try {
+            if (skin.data.frame < 1) {
+                skin.data.frame = 1;
+            }
+
+            SkinListPatch.EnsureAcsSprites(skin.data);
+            if (skin.data.sprites is { Length: > 0 } && skin.data.sprites[0] is not null) {
+                return;
+            }
+
+            _ = skin.data.GetSprite();
+        }
+        catch (Exception) {
+        }
     }
 
     /// <summary>
@@ -152,8 +262,12 @@ internal class PcSkinPatch
         string normalized = NormalizeSkinId(id);
         if (normalized != id && !normalized.IsEmpty()) {
             skin = SpriteReplacer.dictSkins.TryGetValue(normalized);
+            if (skin is not null) {
+                return skin;
+            }
         }
-        return skin;
+
+        return TextureSkinCatalog.EnsureSkin(normalized.IsEmpty() ? id : normalized);
     }
 
     /// <summary>
@@ -267,11 +381,6 @@ internal static class PcSkinBinder
     internal static void Ensure(string reason, bool forceListSkins = false)
     {
         try {
-            var pc = EClass.pc;
-            if (pc is null || pc.c_idSpriteReplacer.IsEmpty()) {
-                return;
-            }
-
             if (forceListSkins) {
                 try {
                     SpriteReplacer.ListSkins();
@@ -281,26 +390,33 @@ internal static class PcSkinBinder
                 }
             }
 
-            if (pc.renderer is CharaRenderer cr) {
-                PcSkinPatch.TryApplyPcSkin(cr, forceListSkins: forceListSkins);
+            var pc = EClass.pc;
+            if (pc is not null && !pc.c_idSpriteReplacer.IsEmpty()) {
+                if (pc.renderer is CharaRenderer cr) {
+                    PcSkinPatch.TryApplyPcSkin(cr, forceListSkins: forceListSkins);
+                }
+
+                bool ok = pc.spriteReplacer is not null && PcSkinPatch.HasUsableSkin(pc.spriteReplacer);
+                if (ok) {
+                    int clipCount = AcsSuffixes.CountClips(pc.spriteReplacer);
+                    bool hasStatic = PcSkinPatch.GetStaticSkinData(pc.spriteReplacer) is not null;
+                    AcsMod.Log(
+                        $"PC skin ready ({reason}): {pc.c_idSpriteReplacer} clips={clipCount} static={hasStatic}");
+                    _ensureUntilFrame = -1;
+                }
+                else if (forceListSkins) {
+                    string detail = "null";
+                    if (pc.spriteReplacer is not null) {
+                        int keys = pc.spriteReplacer.suffixes?.Count ?? 0;
+                        detail = $"no-usable-skin (suffixKeys={keys}, data={(pc.spriteReplacer.data is null ? "null" : "set")})";
+                    }
+                    AcsMod.Warn(
+                        $"PC skin not ready ({reason}): id={pc.c_idSpriteReplacer}, replacer={detail}");
+                }
             }
 
-            bool ok = pc.spriteReplacer is not null && PcSkinPatch.HasUsableSkin(pc.spriteReplacer);
-            if (ok) {
-                int clipCount = AcsSuffixes.CountClips(pc.spriteReplacer);
-                bool hasStatic = PcSkinPatch.GetStaticSkinData(pc.spriteReplacer) is not null;
-                AcsMod.Log(
-                    $"PC skin ready ({reason}): {pc.c_idSpriteReplacer} clips={clipCount} static={hasStatic}");
-                _ensureUntilFrame = -1;
-            }
-            else if (forceListSkins) {
-                string detail = "null";
-                if (pc.spriteReplacer is not null) {
-                    int keys = pc.spriteReplacer.suffixes?.Count ?? 0;
-                    detail = $"no-usable-skin (suffixKeys={keys}, data={(pc.spriteReplacer.data is null ? "null" : "set")})";
-                }
-                AcsMod.Warn(
-                    $"PC skin not ready ({reason}): id={pc.c_idSpriteReplacer}, replacer={detail}");
+            if (forceListSkins || reason == "retry" || reason == "ListSkins") {
+                SkinUi.RebindNpcCustomSkins();
             }
         }
         catch (Exception ex) {
@@ -382,7 +498,7 @@ internal static class PcSkinCommands
         SpriteReplacer.ListSkins();
         var skin = SpriteReplacer.dictSkins.TryGetValue(skinId);
         if (skin is null) {
-            return $"Skin '{skinId}' not found in Skin folder.";
+            return $"Skin '{skinId}' not found in Skin / Texture folders.";
         }
 
         pc.c_idSpriteReplacer = skinId;
@@ -412,7 +528,7 @@ internal static class PcSkinCommands
         SpriteReplacer.ListSkins();
         var skins = SpriteReplacer.dictSkins;
         if (skins.Count == 0) {
-            return "No skins found in Skin folder.";
+            return "No skins found in Skin / Texture folders.";
         }
 
         var sb = new System.Text.StringBuilder();
@@ -437,6 +553,7 @@ internal static class PcSkinCommands
             AcsStateResolver.ClearHostileScanCache();
             ACS.API.StaticCombatMap.Invalidate();
 
+            TextureSkinCatalog.Invalidate();
             SpriteReplacer.ListSkins();
             PcSkinBinder.Ensure("ReloadAcs", forceListSkins: false);
 
@@ -466,13 +583,6 @@ internal static class SkinUi
             return;
         }
 
-        try {
-            SpriteReplacer.ListSkins();
-        }
-        catch (Exception ex) {
-            AcsMod.Warn($"ListSkins before LayerEditSkin: {ex.Message}");
-        }
-
         var layer = EClass.ui.AddLayer<LayerEditSkin>();
         if (onKill is not null) {
             layer.SetOnKill(onKill);
@@ -492,17 +602,71 @@ internal static class SkinUi
 
         try {
             if (c.renderer is CharaRenderer cr) {
-                PcSkinPatch.TryApplyPcSkin(cr, forceListSkins: true);
+                if (cr.pccData is not null) {
+                    PcSkinPatch.TryApplyPcSkin(cr, forceListSkins: true);
+                }
+                else if (!c.c_idSpriteReplacer.IsEmpty()) {
+                    c._CreateRenderer();
+                }
+
+                c.renderer?.RefreshSprite();
             }
             else if (!c.c_idSpriteReplacer.IsEmpty()) {
                 c._CreateRenderer();
-                if (c.renderer is CharaRenderer cr2) {
+                if (c.renderer is CharaRenderer cr2 && cr2.pccData is not null) {
                     PcSkinPatch.TryApplyPcSkin(cr2, forceListSkins: true);
                 }
             }
         }
         catch (Exception ex) {
             AcsMod.Warn($"RebindAfterSkinEdit: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 读档时 dictSkins 可能还空，NPC SetOwner 绑不上自定义皮肤。
+    /// ListSkins 之后补一次：PCC 叠 ACS，非 PCC 若仍走种族 pass 则重建 renderer。
+    /// </summary>
+    internal static void RebindNpcCustomSkins()
+    {
+        try {
+            var map = EClass._map;
+            if (map?.charas is null) {
+                return;
+            }
+
+            int rebuilt = 0;
+            foreach (var chara in map.charas) {
+                if (chara is null || chara.IsPC || chara.c_idSpriteReplacer.IsEmpty()) {
+                    continue;
+                }
+
+                TextureSkinCatalog.EnsureSkin(chara.c_idSpriteReplacer);
+
+                if (chara.renderer is CharaRenderer cr && cr.pccData is not null) {
+                    PcSkinPatch.TryApplyPcSkin(cr);
+                    continue;
+                }
+
+                if (chara.renderer is CharaRenderer npc) {
+                    PcSkinPatch.BindNpcCustomSkin(npc);
+                    if (chara.spriteReplacer is null) {
+                        chara._CreateRenderer();
+                        rebuilt++;
+                    }
+                }
+                else {
+                    chara._CreateRenderer();
+                    rebuilt++;
+                }
+            }
+
+            if (rebuilt > 0) {
+                AcsMod.Log($"rebound {rebuilt} NPC custom-skin renderer(s)");
+            }
+        }
+        catch (Exception ex) {
+            AcsMod.Warn($"RebindNpcCustomSkins: {ex.Message}");
         }
     }
 }
@@ -550,7 +714,7 @@ internal class CreateCharSkinPatch
 }
 
 /// <summary>
-/// 居民列表右键菜单为 PC 追加 editSkin。
+/// 居民列表右键菜单为 PC / PCC NPC 追加 editSkin。
 /// </summary>
 [HarmonyPatch]
 internal class PeopleMenuPatch
@@ -559,11 +723,19 @@ internal class PeopleMenuPatch
     [HarmonyPatch(typeof(BaseListPeople), nameof(BaseListPeople.OnClick))]
     internal static void OnClickPostfix(BaseListPeople __instance, Chara c)
     {
-        if (c is null || c != EClass.pc) {
+        if (c is null || c.mimicry != null) {
             return;
         }
 
-        if (c.mimicry != null) {
+        // 原版只给非 PCC 居民加 editSkin；这里补 PC 与 PCC NPC。
+        bool vanillaHasEditSkin = !c.IsPC
+            && c.pccData is null
+            && (c.sourceCard is null || c.sourceCard.idActor.IsEmpty());
+        if (vanillaHasEditSkin) {
+            return;
+        }
+
+        if (!c.IsPC && c.pccData is null) {
             return;
         }
 

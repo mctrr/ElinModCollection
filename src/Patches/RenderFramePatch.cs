@@ -24,6 +24,15 @@ internal class RenderFramePatch
     private static readonly AccessTools.FieldRef<CardActor, int> SpriteIndexRef =
         AccessTools.FieldRefAccess<CardActor, int>("spriteIndex");
 
+    private static readonly AccessTools.FieldRef<CardActor, float> SpriteTimerRef =
+        AccessTools.FieldRefAccess<CardActor, float>("spriteTimer");
+
+    /// <summary>
+    /// GetCurrentAnimatedData 被调用说明原版动画块没被 HasSprite / frame 早退跳过。
+    /// 自定义皮肤在种族无 Texture ACS 时会早退，需由 Postfix 自己推进帧。
+    /// </summary>
+    private static bool _vanillaAnimTouched;
+
     /// <summary>
     /// Transpiler：在原版“读取 data.frame”附近插入委托调用，
     /// 把局部变量里的 SpriteData 替换为 GetCurrentAnimatedData 的返回值。
@@ -62,6 +71,7 @@ internal class RenderFramePatch
     /// </summary>
     private static SpriteData GetCurrentAnimatedData(SpriteData current, CardActor actor, RenderParam p)
     {
+        _vanillaAnimTouched = true;
         var owner = actor.owner;
         if (owner is null) {
             return current;
@@ -104,12 +114,12 @@ internal class RenderFramePatch
             return current;
         }
 
-        // greet 播到最后一帧附近时清标记，下次回到 idle/其他状态
-        if (AcsStateResolver.IsGreetActive(chara) && data.frame > 0) {
-            int spriteIndex = SpriteIndexRef(actor);
-            if (spriteIndex >= data.frame - 1) {
-                AcsStateResolver.StopGreet(chara);
-            }
+        // 原版拿到 clip 后还会 spriteIndex++ / wrap。revive/greet 末帧先冻住，避免再闪第 0 帧。
+        if (AcsStateResolver.FreezeOneShotBeforeWrap(
+                chara, data.frame, SpriteIndexRef(actor), SpriteTimerRef(actor), data.time)) {
+            // -delta：原版随后 += delta 后仍 < time，本帧不会 wrap
+            SpriteTimerRef(actor) = -Core.delta;
+            SpriteIndexRef(actor) = data.frame - 1;
         }
 
         return data;
@@ -185,45 +195,11 @@ internal class RenderFramePatch
     // 将 SpriteData 的第一帧应用到 CardActor 的 sr 和 mpb
     private static void ApplySpriteToActor(CardActor actor, SpriteData spriteData, bool force = false)
     {
-        if (actor.sr is null || actor.mpb is null || spriteData is null) {
+        if (spriteData is null) {
             return;
         }
 
-        var sprite = spriteData.GetSprite();
-        if (sprite is null || sprite.texture is null) {
-            return;
-        }
-
-        int actorId = actor.GetInstanceID();
-        int spriteId = sprite.GetInstanceID();
-        bool flip = actor.sr.flipX;
-        if (!force
-            && _combatAppliedSpriteIds.TryGetValue(actorId, out int lastId)
-            && lastId == spriteId
-            && _combatAppliedFlip.TryGetValue(actorId, out bool lastFlip)
-            && lastFlip == flip
-            && ReferenceEquals(actor.sr.sprite, sprite)) {
-            return;
-        }
-
-        actor.sr.sprite = sprite;
-        if (sprite.texture.filterMode != FilterMode.Point) {
-            sprite.texture.filterMode = FilterMode.Point;
-        }
-
-        actor.mpb.SetTexture("_MainTex", sprite.texture);
-        var tex = sprite.texture;
-        var tr = sprite.textureRect;
-        float x0 = tr.x / (float)tex.width;
-        float x1 = tr.xMax / (float)tex.width;
-        float y0 = tr.yMin / (float)tex.height;
-        float y1 = tr.yMax / (float)tex.height;
-        var rect = flip ? new Vector4(x1, y0, x0, y1) : new Vector4(x0, y0, x1, y1);
-        actor.mpb.SetVector("_Rect", rect);
-        actor.mpb.SetFloat("_PixelHeight", sprite.rect.height);
-        actor.sr.SetPropertyBlock(actor.mpb);
-        _combatAppliedSpriteIds[actorId] = spriteId;
-        _combatAppliedFlip[actorId] = flip;
+        ApplySpriteToActor(actor, spriteData.GetSprite(), force);
     }
 
     private static SpriteData? ResolveNonCombatSprite(Chara chara, SpriteReplacer? replacer)
@@ -250,6 +226,13 @@ internal class RenderFramePatch
         return null;
     }
 
+    [HarmonyPrefix]
+    [HarmonyPatch(typeof(CardActor), nameof(CardActor.OnRender))]
+    internal static void OnRenderPrefix()
+    {
+        _vanillaAnimTouched = false;
+    }
+
     [HarmonyPostfix]
     [HarmonyPatch(typeof(CardActor), nameof(CardActor.OnRender))]
     internal static void OnRenderPostfix(CardActor __instance, RenderParam p)
@@ -265,6 +248,8 @@ internal class RenderFramePatch
 
         int actorId = __instance.GetInstanceID();
         var replacer = chara.spriteReplacer ?? chara.sourceCard?.replacer;
+        bool vanillaTouched = _vanillaAnimTouched;
+        _vanillaAnimTouched = false;
 
         // 静态 _bcs_combat：原版 frame<=1 早退，只能靠 Postfix 覆盖
         if (AcsStateResolver.IsCombatVisual(chara)
@@ -276,16 +261,114 @@ internal class RenderFramePatch
         }
 
         // 非 combat：上一帧有战斗 sprite 则恢复为正常贴图
-        if (!_combatSpriteActors.Remove(actorId)) {
+        if (_combatSpriteActors.Remove(actorId)) {
+            var normalData = ResolveNonCombatSprite(chara, replacer);
+            if (normalData is not null) {
+                ApplySpriteToActor(__instance, normalData, force: true);
+            }
+
+            _combatAppliedSpriteIds.Remove(actorId);
+            _combatAppliedFlip.Remove(actorId);
             return;
         }
 
-        var normalData = ResolveNonCombatSprite(chara, replacer);
-        if (normalData is not null) {
-            ApplySpriteToActor(__instance, normalData, force: true);
+        // 原版 CardActor 用 sourceCard.replacer + 种族 id。
+        // 手动换肤后若种族没有 Texture ACS，HasSprite 早退，自定义 ACS 永远不播。
+        if (!vanillaTouched) {
+            TryApplyCustomSkinAnim(__instance, chara, p);
+        }
+    }
+
+    /// <summary>
+    /// 原版动画块被跳过时，用当前自定义皮肤的 ACS / 底图推进并覆盖 sr。
+    /// </summary>
+    private static void TryApplyCustomSkinAnim(CardActor actor, Chara chara, RenderParam p)
+    {
+        if (chara.c_idSpriteReplacer.IsEmpty()) {
+            return;
         }
 
-        _combatAppliedSpriteIds.Remove(actorId);
-        _combatAppliedFlip.Remove(actorId);
+        SpriteData? data = null;
+        var suffixes = AcsSuffixes.Resolve(chara);
+        if (suffixes is not null) {
+            data = chara.GetAcsClip(p.snow, suffixes);
+        }
+
+        if (data is null) {
+            data = ResolveBaseSheet(chara);
+        }
+
+        if (data is null) {
+            return;
+        }
+
+        if (data.frame > 1) {
+            AdvanceAndApply(actor, chara, data);
+            return;
+        }
+
+        AcsStateResolver.StopOneShotIfLastFrame(chara, data.frame, 0);
+        ApplySpriteToActor(actor, data);
+    }
+
+    private static void AdvanceAndApply(CardActor actor, Chara chara, SpriteData data)
+    {
+        float timer = SpriteTimerRef(actor);
+        int index = SpriteIndexRef(actor);
+        timer += Core.delta;
+        if (timer >= data.time && data.time > 0f) {
+            timer -= data.time;
+            index = AcsStateResolver.AdvanceClipIndex(chara, data.frame, index);
+        }
+
+        SpriteTimerRef(actor) = timer;
+        SpriteIndexRef(actor) = index;
+
+        Sprite? sprite = null;
+        try {
+            var sprites = data.GetSprites();
+            sprite = sprites.TryGet(index, returnNull: true);
+        }
+        catch {
+            sprite = data.GetSprite();
+        }
+
+        if (sprite is not null) {
+            ApplySpriteToActor(actor, sprite);
+        }
+    }
+
+    /// <summary>
+    /// Vanilla OnRender animation only swaps sr.sprite / _MainTex.
+    /// Do not rewrite _Rect / _PixelHeight: RefreshSprite already laid those out from the base sprite.
+    /// Changing them to ACS-frame UVs is what sank the NPC sprite.
+    /// </summary>
+    private static void ApplySpriteToActor(CardActor actor, Sprite sprite, bool force = false)
+    {
+        if (actor.sr is null || actor.mpb is null || sprite is null || sprite.texture is null) {
+            return;
+        }
+
+        int actorId = actor.GetInstanceID();
+        int spriteId = sprite.GetInstanceID();
+        bool flip = actor.sr.flipX;
+        if (!force
+            && _combatAppliedSpriteIds.TryGetValue(actorId, out int lastId)
+            && lastId == spriteId
+            && _combatAppliedFlip.TryGetValue(actorId, out bool lastFlip)
+            && lastFlip == flip
+            && ReferenceEquals(actor.sr.sprite, sprite)) {
+            return;
+        }
+
+        actor.sr.sprite = sprite;
+        if (sprite.texture.filterMode != FilterMode.Point) {
+            sprite.texture.filterMode = FilterMode.Point;
+        }
+
+        actor.mpb.SetTexture("_MainTex", sprite.texture);
+        actor.sr.SetPropertyBlock(actor.mpb);
+        _combatAppliedSpriteIds[actorId] = spriteId;
+        _combatAppliedFlip[actorId] = flip;
     }
 }

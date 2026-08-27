@@ -79,6 +79,13 @@ public static class AcsController
     private const string KeyConfused = "_acs_confused";
     private const string KeyBlind = "_acs_blind";
     private const string KeyGreet = "_acs_greet";
+    private const string KeyGreet1 = "_acs_greet1";
+    private const string KeyGreet2 = "_acs_greet2";
+    private const string KeyGreet3 = "_acs_greet3";
+    private const string KeyGreet4 = "_acs_greet4";
+    private const string KeyEat = "_acs_eat";
+    private const string KeyMcombat = "_acs_mcombat";
+    private const string KeyRevive = "_acs_revive";
 
     // ----- snow 前缀 -----
     private const string KeySnow = "_acs_snow";
@@ -93,6 +100,13 @@ public static class AcsController
     private const string KeySnowConfused = "_acs_snow.confused";
     private const string KeySnowBlind = "_acs_snow.blind";
     private const string KeySnowGreet = "_acs_snow.greet";
+    private const string KeySnowGreet1 = "_acs_snow.greet1";
+    private const string KeySnowGreet2 = "_acs_snow.greet2";
+    private const string KeySnowGreet3 = "_acs_snow.greet3";
+    private const string KeySnowGreet4 = "_acs_snow.greet4";
+    private const string KeySnowEat = "_acs_snow.eat";
+    private const string KeySnowMcombat = "_acs_snow.mcombat";
+    private const string KeySnowRevive = "_acs_snow.revive";
 
     // ----- married 前缀 -----
     private const string KeyMarried = "_acs_married";
@@ -107,6 +121,13 @@ public static class AcsController
     private const string KeyMarriedConfused = "_acs_married.confused";
     private const string KeyMarriedBlind = "_acs_married.blind";
     private const string KeyMarriedGreet = "_acs_married.greet";
+    private const string KeyMarriedGreet1 = "_acs_married.greet1";
+    private const string KeyMarriedGreet2 = "_acs_married.greet2";
+    private const string KeyMarriedGreet3 = "_acs_married.greet3";
+    private const string KeyMarriedGreet4 = "_acs_married.greet4";
+    private const string KeyMarriedEat = "_acs_married.eat";
+    private const string KeyMarriedMcombat = "_acs_married.mcombat";
+    private const string KeyMarriedRevive = "_acs_married.revive";
 
     /// <summary>便捷重载：从角色种族默认 replacer.suffixes 取片。</summary>
     public static SpriteData? GetAcsClip(this Chara chara, bool snow = false)
@@ -120,16 +141,33 @@ public static class AcsController
     /// 查找顺序（简化）：
     /// 1) combat：_acs_{prefix}.combat.{weapon} → _acs_{prefix}.combat → 无前缀同序
     ///    weapon 仅 sword/polearm/staff（主手）；单套战斗动画只用 _acs_combat
+    /// 1b) mcombat：施法窗口（优先级高于 combat）先取 _acs_{prefix}.mcombat，
+    ///    缺片时按 combat 选片回退
     /// 2) 其它状态：_acs_{prefix}.{state}
     /// 3) 仅当 state==idle 时，才允许旧式通用片 _acs_{prefix}
     /// 4) 再找无前缀 _acs_{state}
-    /// 5) greet 找不到 → 清 greet 标记并重新解析
+    /// 5) greet / greetN / revive 找不到 → 清一次性标记并重新解析
     /// 6) 其它非 idle 找不到 → 回退 idle
     /// </summary>
     public static SpriteData? GetAcsClip(this Chara chara, bool snow, Dictionary<string, SpriteData> suffixes)
     {
         string state = AcsStateResolver.GetState(chara);
         string? prefix = AcsStateResolver.GetPrefix(chara, snow);
+
+        // mcombat 优先于 combat；缺专属片时按 combat 选片回退（含主手武器键）
+        if (state == "mcombat") {
+            if (prefix != null
+                && TryGetPrefixed(suffixes, prefix, "mcombat", out var prefixedMcombat)) {
+                return prefixedMcombat;
+            }
+
+            if (suffixes.TryGetValue(KeyMcombat, out var baseMcombat)) {
+                return baseMcombat;
+            }
+
+            state = "combat";
+        }
+
         string? weaponKey = state == "combat"
             ? AcsStateResolver.GetMainHandCombatWeaponKey(chara)
             : null;
@@ -159,9 +197,15 @@ public static class AcsController
             return baseState;
         }
 
-        // greet 无资源：停掉问候，递归一次走非 greet 状态（StopGreet 后不会再进 greet）
-        if (state == "greet") {
+        // greet / greetN 无资源：停掉问候，递归一次走非 greet 状态
+        if (state == "greet" || state.StartsWith("greet")) {
             AcsStateResolver.StopGreet(chara);
+            return GetAcsClip(chara, snow, suffixes);
+        }
+
+        // revive 无资源：停掉复活动作，递归一次走其它状态
+        if (state == "revive") {
+            AcsStateResolver.StopRevive(chara);
             return GetAcsClip(chara, snow, suffixes);
         }
 
@@ -277,6 +321,13 @@ public static class AcsController
             "confused" => KeyConfused,
             "blind" => KeyBlind,
             "greet" => KeyGreet,
+            "greet1" => KeyGreet1,
+            "greet2" => KeyGreet2,
+            "greet3" => KeyGreet3,
+            "greet4" => KeyGreet4,
+            "eat" => KeyEat,
+            "mcombat" => KeyMcombat,
+            "revive" => KeyRevive,
             _ => "_acs_" + state,
         };
 
@@ -326,6 +377,13 @@ public static class AcsController
             "confused" => KeySnowConfused,
             "blind" => KeySnowBlind,
             "greet" => KeySnowGreet,
+            "greet1" => KeySnowGreet1,
+            "greet2" => KeySnowGreet2,
+            "greet3" => KeySnowGreet3,
+            "greet4" => KeySnowGreet4,
+            "eat" => KeySnowEat,
+            "mcombat" => KeySnowMcombat,
+            "revive" => KeySnowRevive,
             _ => "_acs_snow." + state,
         };
 
@@ -339,6 +397,13 @@ public static class AcsController
             "confused" => KeyMarriedConfused,
             "blind" => KeyMarriedBlind,
             "greet" => KeyMarriedGreet,
+            "greet1" => KeyMarriedGreet1,
+            "greet2" => KeyMarriedGreet2,
+            "greet3" => KeyMarriedGreet3,
+            "greet4" => KeyMarriedGreet4,
+            "eat" => KeyMarriedEat,
+            "mcombat" => KeyMarriedMcombat,
+            "revive" => KeyMarriedRevive,
             _ => "_acs_married." + state,
         };
 }

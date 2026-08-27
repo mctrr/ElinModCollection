@@ -4,7 +4,7 @@ using HarmonyLib;
 namespace ACS.Patches;
 
 /// <summary>
-/// 状态触发：PC 主动攻击 / 换主手 combat 窗口、问候动画。
+/// 状态触发：PC 主动攻击 / 换主手 combat 窗口、问候动画、复活动作。
 /// combat 倒计时复用原版 combatCount（Tick 每回合 -1）。
 /// </summary>
 [HarmonyPatch]
@@ -143,6 +143,40 @@ internal class CombatPatch
 
 
 [HarmonyPatch]
+internal class MagicCombatPatch
+{
+    /// <summary>
+    /// 魔法攻击（mcombat）：施放**敌对法术**时开 mcombat 窗口，优先级高于普通 combat。
+    ///
+    /// 判定：<c>a is Spell</c>（是真法术，排除普通技能/能力）且
+    /// <c>a.IsTargetHostileParty()</c>（原版 abilityType 标为 attack/debuff/dot，
+    /// 即打敌人的魔法攻击；治疗/增益/位移等非攻击法术不触发）。
+    ///
+    /// 走 <see cref="Chara.UseAbility(Act, Card, Point, bool)"/> 的
+    /// int/string 重载与 AI（GoalCombat.TryUseAbility、ButtonAbility、HotItemAct）
+    /// 都会汇聚到这里，PC 与 NPC 一网打尽。
+    /// </summary>
+    [HarmonyPostfix]
+    [HarmonyPatch(typeof(Chara), nameof(Chara.UseAbility), new[] {
+        typeof(Act), typeof(Card), typeof(Point), typeof(bool)
+    })]
+    internal static void OnUseHostileSpell(Chara __instance, Act a, Card tc, Point pos, bool __result)
+    {
+        if (!__result || __instance is null) {
+            return;
+        }
+
+        if (a is Spell && a.IsTargetHostileParty()) {
+            AcsStateResolver.MarkActiveMagicCombat(__instance);
+            if (__instance.IsPC) {
+                AcsStateResolver.SetMagicFaceFromTarget(__instance, tc, pos);
+            }
+        }
+    }
+}
+
+
+[HarmonyPatch]
 internal class GreetPatch
 {
     /// <summary>
@@ -156,10 +190,37 @@ internal class GreetPatch
             return;
         }
 
-        if (AcsStateResolver.IsGreetActive(__instance)) {
+        if (AcsStateResolver.HasGreetFlag(__instance)) {
             return;
         }
 
         AcsStateResolver.StartGreet(__instance);
+    }
+}
+
+
+[HarmonyPatch]
+internal class RevivePatch
+{
+    /// <summary>
+    /// 角色真正从死亡复活时播一次 revive 动作（_acs_revive），播完一轮回其它状态。
+    /// Prefix 记下调用前已死，避免对活人 Revive 空调用误触发。
+    /// </summary>
+    [HarmonyPrefix]
+    [HarmonyPatch(typeof(Chara), nameof(Chara.Revive))]
+    internal static void Prefix(Chara __instance, ref bool __state)
+    {
+        __state = __instance is not null && __instance.isDead;
+    }
+
+    [HarmonyPostfix]
+    [HarmonyPatch(typeof(Chara), nameof(Chara.Revive))]
+    internal static void Postfix(Chara __instance, bool __state)
+    {
+        if (!__state || __instance is null || __instance.isDead) {
+            return;
+        }
+
+        AcsStateResolver.StartRevive(__instance);
     }
 }

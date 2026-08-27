@@ -9,6 +9,18 @@ public static class AcsStateResolver
     private const float GreetDelay = 0.2f;
 
     /// <summary>
+    /// eat 手动标记键（mapStr）。值为激活时间戳（realtimeSinceStartup）。
+    /// 仅供 StartEat / StopEat 手动 override；主判定见 <see cref="IsEatActive"/>。
+    /// </summary>
+    private const string EatFlagKey = "acs_eat";
+
+    /// <summary>revive 一次性动作标记（mapStr 时间戳）。</summary>
+    private const string ReviveFlagKey = "acs_revive";
+
+    /// <summary>本次 greet 锁定的状态名：greet / greet1 / greet2 / greet3 / greet4。</summary>
+    private const string GreetVariantKey = "acs_greet_n";
+
+    /// <summary>
     /// PC 主动攻击后 combat ACS 保持回合数。
     /// 复用原版 <see cref="Chara.combatCount"/>（Chara.Tick 每回合 -1）。
     /// </summary>
@@ -25,14 +37,27 @@ public static class AcsStateResolver
     private const int SkillStaff = 103;
     private const int SkillPolearm = 106;
 
-    // ?? combat ?????Equip/Unequip ????? combat ??? body/category
+    // combat weapon key cache: Equip/Unequip refresh, avoid per-frame body/category
     private static readonly Dictionary<int, string?> MainHandCombatWeaponKeyByUid = new();
 
+    // PC mcombat facing: true = screen-right (flip), false = screen-left
+    private static readonly Dictionary<int, bool> MagicFaceRightByUid = new();
+
     /// <summary>
-    /// 基础状态优先级：战斗 > 移动(仅 PC) > greet(NPC) > 异常 > idle
+    /// 基础状态优先级：revive(动作) > 战斗 > 移动(仅 PC) > greet(NPC) > 异常 > idle
     /// </summary>
     public static string GetState(Chara chara)
     {
+        // 复活是一次性动作，优先于战斗/移动，播完一轮自动清除
+        if (IsReviveActive(chara)) {
+            return "revive";
+        }
+
+        // 魔法攻击窗口 > 普通 combat
+        if (IsMagicCombatActive(chara)) {
+            return "mcombat";
+        }
+
         if (IsCombatVisual(chara)) {
             return "combat";
         }
@@ -43,7 +68,11 @@ public static class AcsStateResolver
         }
 
         if (!chara.IsPC && IsGreetActive(chara)) {
-            return "greet";
+            return GetGreetState(chara);
+        }
+
+        if (IsEatActive(chara)) {
+            return "eat";
         }
 
         if (chara.isWet || chara.wasInWater) {
@@ -140,6 +169,161 @@ public static class AcsStateResolver
         MainHandCombatWeaponKeyByUid.Clear();
     }
 
+
+    /// <summary>
+    /// mcombat（魔法攻击）手动标记键（mapStr）。与 combat 窗口同机制：
+    /// <see cref="MarkActiveMagicCombat"/> 写入 combatCount + 该标记，
+    /// 倒计时复用原版 <see cref="Chara.combatCount"/>（Chara.Tick 每回合 -1），
+    /// 耗尽即自动清标记（见 <see cref="IsMagicCombatActive"/>）。
+    /// </summary>
+    public const string MagicCombatFlagKey = "acs_mcombat";
+
+    /// <summary>
+    /// 是否处于魔法攻击（mcombat）窗口。**优先级高于普通 combat**：
+    /// <see cref="GetState"/> 先判 mcombat 再判 combat。
+    ///
+    /// 触发：<see cref="MarkActiveMagicCombat"/>（原版施放敌对法术时，见
+    /// StatePatches 的 Chara.UseAbility 补丁）。非施法状态 / 窗口耗尽自动退出，
+    /// 回落到普通 combat 或 idle。
+    /// </summary>
+    public static bool IsMagicCombatActive(Chara chara)
+    {
+        if (chara is null) {
+            return false;
+        }
+
+        if (!chara.mapStr.ContainsKey(MagicCombatFlagKey)) {
+            return false;
+        }
+
+        // 窗口耗尽：清标记并退出（下次渲染自动回落到 combat / idle）
+        if (chara.combatCount <= 0) {
+            chara.mapStr.Remove(MagicCombatFlagKey);
+            ClearMagicFace(chara);
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// 开 mcombat 窗口：写入 combatCount=5 + 标记（PC / NPC 通用）。
+    /// 持续施法会不断续期；停止施法 5 回合后自动结束。
+    /// </summary>
+    public static void MarkActiveMagicCombat(Chara chara)
+    {
+        if (chara is null || chara.isDead) {
+            return;
+        }
+
+        chara.combatCount = CombatHoldTurns;
+        chara.mapStr.Set(MagicCombatFlagKey, "1");
+    }
+
+    /// <summary>手动强制 mcombat（测试 / 外部调用）。</summary>
+    public static void ForceMagicCombat(Chara chara) => MarkActiveMagicCombat(chara);
+
+    /// <summary>立即结束 mcombat 窗口（测试 / 外部调用）。</summary>
+    public static void ClearMagicCombat(Chara chara)
+    {
+        chara?.mapStr.Remove(MagicCombatFlagKey);
+        ClearMagicFace(chara);
+    }
+
+    /// <summary>
+    /// PC 施放敌对法术时，按目标相对位置锁左右朝向（等距 screenX ∝ mapX+mapZ）。
+    /// 纯屏竖方向不改朝向。窗口结束自动清除。
+    /// </summary>
+    public static void SetMagicFaceFromTarget(Chara chara, Card? tc, Point? pos)
+    {
+        if (chara is null || chara.pos is null) {
+            return;
+        }
+
+        Point? target = ResolveMagicTargetPoint(chara, tc, pos);
+        if (target is null) {
+            return;
+        }
+
+        float screenH = (target.x - chara.pos.x) + (target.z - chara.pos.z);
+        if (Mathf.Abs(screenH) <= 0.01f) {
+            return;
+        }
+
+        MagicFaceRightByUid[chara.uid] = screenH > 0f;
+    }
+
+    public static bool TryGetMagicFaceRight(Chara chara, out bool faceRight)
+    {
+        faceRight = false;
+        if (chara is null || !IsMagicCombatActive(chara)) {
+            if (chara is not null) {
+                ClearMagicFace(chara);
+            }
+
+            return false;
+        }
+
+        return MagicFaceRightByUid.TryGetValue(chara.uid, out faceRight);
+    }
+
+    public static void ClearMagicFace(Chara? chara)
+    {
+        if (chara is null) {
+            return;
+        }
+
+        MagicFaceRightByUid.Remove(chara.uid);
+    }
+
+    private static Point? ResolveMagicTargetPoint(Chara chara, Card? tc, Point? pos)
+    {
+        if (tc is not null && tc.pos is not null && !ReferenceEquals(tc, chara)) {
+            return tc.pos;
+        }
+
+        if (IsUsablePoint(pos, chara)) {
+            return pos;
+        }
+
+        try {
+            Card actTc = Act.TC;
+            if (actTc is not null && actTc.pos is not null && !ReferenceEquals(actTc, chara)) {
+                return actTc.pos;
+            }
+        }
+        catch {
+        }
+
+        try {
+            Point actTp = Act.TP;
+            if (IsUsablePoint(actTp, chara)) {
+                return actTp;
+            }
+        }
+        catch {
+        }
+
+        return null;
+    }
+
+    private static bool IsUsablePoint(Point? p, Chara chara)
+    {
+        if (p is null || chara.pos is null) {
+            return false;
+        }
+
+        try {
+            if (!p.IsValid) {
+                return false;
+            }
+        }
+        catch {
+        }
+
+        return p.x != chara.pos.x || p.z != chara.pos.z;
+    }
+
     private static string? ComputeMainHandCombatWeaponKey(Chara chara)
     {
         try {
@@ -207,6 +391,7 @@ public static class AcsStateResolver
     public static void ClearHostileScanCache()
     {
         ClearMainHandCombatWeaponKeyCache();
+        MagicFaceRightByUid.Clear();
 
         try {
             var pc = EClass.pc;
@@ -386,16 +571,262 @@ public static class AcsStateResolver
         return Time.realtimeSinceStartup >= activateAt;
     }
 
-    /// <summary>触发问候（延迟 <see cref="GreetDelay"/> 秒后激活）。</summary>
+    /// <summary>已写入 greet 标记（含 0.2s 延迟尚未激活）。</summary>
+    public static bool HasGreetFlag(Chara chara)
+        => chara is not null && chara.mapStr.ContainsKey("acs_greet");
+
+    /// <summary>本次问候锁定的 clip 状态名。</summary>
+    public static string GetGreetState(Chara chara)
+    {
+        if (chara.mapStr.TryGetValue(GreetVariantKey, out string variant)
+            && !variant.IsEmpty()) {
+            return variant;
+        }
+
+        return "greet";
+    }
+
+    /// <summary>触发问候（延迟 <see cref="GreetDelay"/> 秒后激活）。随机锁定 greet1-4 中实际存在的片。</summary>
     public static void StartGreet(Chara chara)
     {
         chara.mapStr.Set("acs_greet",
             (Time.realtimeSinceStartup + GreetDelay)
             .ToString());
+        chara.mapStr.Set(GreetVariantKey, PickGreetState(chara));
     }
 
     public static void StopGreet(Chara chara)
     {
         chara.mapStr.Remove("acs_greet");
+        chara.mapStr.Remove(GreetVariantKey);
+    }
+
+    /// <summary>
+    /// 在 greet / greet1-4 里随机挑一个当前 suffixes 里存在的片。
+    /// 无编号 greet 与 greetN 同等参与抽取，避免只有 greet2 时永远播不到 greet。
+    /// </summary>
+    private static string PickGreetState(Chara chara)
+    {
+        var suffixes = AcsSuffixes.Resolve(chara);
+        if (suffixes is null || suffixes.Count == 0) {
+            return "greet";
+        }
+
+        bool snow = EClass.core is not null
+            && EClass.core.IsGameStarted
+            && EClass._zone is not null
+            && EClass._zone.IsSnowCovered;
+        string? prefix = GetPrefix(chara, snow);
+
+        // bit0 = greet, bit1-4 = greet1-4
+        int mask = 0;
+        int count = 0;
+        for (int n = 0; n <= 4; n++) {
+            string state = n == 0 ? "greet" : "greet" + n;
+            if (!HasGreetClip(suffixes, prefix, state)) {
+                continue;
+            }
+
+            mask |= 1 << n;
+            count++;
+        }
+
+        if (count == 0) {
+            return "greet";
+        }
+
+        int pick = EClass.rnd(count);
+        for (int n = 0; n <= 4; n++) {
+            if ((mask & (1 << n)) == 0) {
+                continue;
+            }
+
+            if (pick == 0) {
+                return n == 0 ? "greet" : "greet" + n;
+            }
+
+            pick--;
+        }
+
+        return "greet";
+    }
+
+    private static bool HasGreetClip(Dictionary<string, SpriteData> suffixes, string? prefix, string state)
+    {
+        if (prefix != null
+            && suffixes.TryGetValue("_acs_" + prefix + "." + state, out var prefixed)
+            && prefixed is not null) {
+            return true;
+        }
+
+        return suffixes.TryGetValue("_acs_" + state, out var data) && data is not null;
+    }
+
+    // ---------------- revive ----------------
+
+    /// <summary>acs_revive 存激活时间戳；当前时间 >= 该值才算激活。</summary>
+    public static bool IsReviveActive(Chara chara)
+    {
+        if (chara is null || !chara.mapStr.TryGetValue(ReviveFlagKey, out string value)) {
+            return false;
+        }
+
+        if (!float.TryParse(value, out float activateAt)) {
+            return false;
+        }
+
+        return Time.realtimeSinceStartup >= activateAt;
+    }
+
+    /// <summary>开始复活动作（立即激活，播完一轮自动清除）。</summary>
+    public static void StartRevive(Chara chara)
+    {
+        if (chara is null) {
+            return;
+        }
+
+        chara.mapStr.Set(ReviveFlagKey, Time.realtimeSinceStartup.ToString());
+    }
+
+    public static void StopRevive(Chara chara)
+    {
+        chara?.mapStr.Remove(ReviveFlagKey);
+    }
+
+    public static bool IsOneShotActive(Chara chara)
+        => IsReviveActive(chara) || IsGreetActive(chara);
+
+    public static bool TryFinishOneShot(Chara chara)
+    {
+        if (chara is null) {
+            return false;
+        }
+
+        if (IsReviveActive(chara)) {
+            StopRevive(chara);
+            return true;
+        }
+
+        if (IsGreetActive(chara)) {
+            StopGreet(chara);
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 推进帧。revive / greet 播完最后一帧后停在末帧并清标记，
+    /// 不要 wrap 回第 0 帧（否则会再闪开头几帧）。
+    /// </summary>
+    public static int AdvanceClipIndex(Chara chara, int frame, int index)
+    {
+        index++;
+        if (frame <= 0) {
+            return 0;
+        }
+
+        if (index < frame) {
+            return index;
+        }
+
+        if (TryFinishOneShot(chara)) {
+            return frame - 1;
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// 原版 CardActor 在拿到 clip 后还会 spriteIndex++ / wrap。
+    /// 若本帧会从末帧绕回 0，先结束一次性动作并冻在末帧。
+    /// </summary>
+    public static bool FreezeOneShotBeforeWrap(Chara chara, int frame, int index, float timer, float time)
+    {
+        if (chara is null || frame <= 1 || time <= 0f || !IsOneShotActive(chara)) {
+            return false;
+        }
+
+        if (index < frame - 1 || timer + Core.delta < time) {
+            return false;
+        }
+
+        TryFinishOneShot(chara);
+        return true;
+    }
+
+    /// <summary>单帧 clip：立刻结束一次性动作。</summary>
+    public static void StopOneShotIfLastFrame(Chara chara, int frame, int index)
+    {
+        if (chara is null || frame <= 0) {
+            return;
+        }
+
+        if (frame <= 1 || index >= frame - 1) {
+            TryFinishOneShot(chara);
+        }
+    }
+
+    // ---------------- eat ----------------
+
+    /// <summary>
+    /// Is eat animation active?
+    ///
+    /// Primary detection (stateless, no external calls needed): vanilla AI_Eat is
+    /// running its "eating" progress child -- ai is AI_Eat AND the current child act
+    /// is AIProgress AND the hand holds a card.
+    ///
+    /// Why this is precise: inside AI_Eat.Run the only progress child that runs while
+    /// a card is held is the eating progress itself (canProgress requires
+    /// owner.held == target). During the AI_Cook progress the food sits on the cooker
+    /// (held == null), and walking to the dining spot is an AI_Goto (not AIProgress),
+    /// so neither triggers eat.
+    ///
+    /// When eating ends (progress complete or cancelled: moved / damaged / full /
+    /// food gone) the progress child is done, Current stops being an AIProgress and
+    /// the next frame falls back to idle automatically -- no StopEat required.
+    ///
+    /// Fallback: manual flag via <see cref="StartEat"/> / <see cref="StopEat"/>
+    /// (testing / external override).
+    /// </summary>
+    public static bool IsEatActive(Chara chara)
+    {
+        if (chara is null) {
+            return false;
+        }
+
+        if (chara.ai is AI_Eat eatAi
+            && eatAi.Current is AIProgress
+            && chara.held != null) {
+            return true;
+        }
+
+        return IsEatFlagActive(chara);
+    }
+
+    /// <summary>Manual eat flag (mapStr timestamp, same pattern as greet).</summary>
+    public static bool IsEatFlagActive(Chara chara)
+    {
+        if (!chara.mapStr.TryGetValue(EatFlagKey, out string value)) {
+            return false;
+        }
+
+        return float.TryParse(value, out float activateAt)
+            && Time.realtimeSinceStartup >= activateAt;
+    }
+
+    /// <summary>
+    /// Manually start the eat animation (loops until <see cref="StopEat"/> or the
+    /// game state ends). Normally not needed: <see cref="IsEatActive"/> auto-detects.
+    /// </summary>
+    public static void StartEat(Chara chara)
+    {
+        chara.mapStr.Set(EatFlagKey, Time.realtimeSinceStartup.ToString());
+    }
+
+    /// <summary>Manually stop the eat animation.</summary>
+    public static void StopEat(Chara chara)
+    {
+        chara.mapStr.Remove(EatFlagKey);
     }
 }

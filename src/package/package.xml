@@ -12,7 +12,6 @@
 
 基于 [b]Animated Custom Sprites[/b]（作者 DK）的增强版，新增角色状态感知的动画自动切换功能。
 
-[b]原版 ACS 需要卸载[/b]，否则两者会冲突。
 
 仓库：[url=https://github.com/mctrr/BetterCustomSprites]github.com/mctrr/BetterCustomSprites[/url]
 
@@ -25,9 +24,10 @@
 在原版 combat / idle 的基础上，mod 会根据角色当前状态自动选择动画：
 
 [list]
+[*] [b]revive[/b] - 被复活时播放一次复活动作，播完自动回到其它状态
 [*] [b]combat[/b] - 战斗中（原版支持；可再拆 sword / polearm / staff）
 [*] [b]move[/b] - 仅主角移动时（资源名 _acs_move）
-[*] [b]greet[/b] - 见面问候：NPC 看见玩家时自动播放一次问候动画，播完自动回到 idle
+[*] [b]greet[/b] - 见面问候：NPC 看见玩家时自动播放一次问候动画；有 greet1-4 时随机选一张，播完自动回到 idle
 [*] [b]wet[/b] - 潮湿 / 曾在水中
 [*] [b]drunk[/b] - 醉酒
 [*] [b]confused[/b] - 混乱
@@ -36,9 +36,10 @@
 [/list]
 
 状态优先级从高到低：
-[code]combat > move(PC) > greet(NPC) > wet > drunk > confused > blind > idle[/code]
+[code]revive > combat > move(PC) > greet(NPC) > wet > drunk > confused > blind > idle[/code]
 
-异常状态只在非战斗时生效，战斗中一定显示 combat 动画。
+异常状态只在非战斗时生效，战斗中一定显示 combat 动画（施法窗口则显示 mcombat）。
+PC 朝反方向释放敌对法术时，会按目标的屏幕水平方向转身。
 
 [h2]命名格式[/h2]
 
@@ -46,7 +47,7 @@
 
 [list]
 [*] [b]前缀[/b]（可选）：任意皮肤名（手动） / snow（雪地） / married（已婚）
-[*] [b]状态[/b]：combat / move / greet / wet / drunk / confused / blind / idle（idle 无需写出）
+[*] [b]状态[/b]：revive / combat / move / greet / greet1-4 / wet / drunk / confused / blind / idle（idle 无需写出）
 [/list]
 
 [h3]举个例子[/h3]
@@ -124,20 +125,32 @@ _acs_combat
 
 换到没有 combat 的动态皮肤后，战斗时保持当前皮外观（idle / 静态 / 底图），[b]不会[/b]回落到原皮 combat。
 
+[h2]revive 复活动作[/h2]
+
+[list]
+[*] 判定：补丁打在原版 Chara.Revive。只有「调用前已死、调用后活着」才进入 revive，活人空调用不会触发
+[*] 覆盖居民复活 / GetRevived / 区域自动复活 / PC 死亡后爬起等所有真正复活入口
+[*] 一次性动作，优先级最高；播完最后一帧结束，不绕回开头
+[*] 资源名 _acs_revive；没有该片时自动回退，不会出错
+[/list]
+
 [h2]greet 问候动画说明[/h2]
 
 [list]
 [*] 当 NPC 触发 fov 对话气泡（看见玩家主动搭话）时，自动进入 greet
+[*] 若提供 _acs_greet / _acs_greet1 … _acs_greet4，触发时在已有的片里随机锁一张
 [*] greet 播完一轮后自动结束，回到 idle
 [*] 没有 greet 资源时自动回退 idle，不会出错
 [*] 触发后约 0.2 秒延迟，避免瞬间切动画
 [/list]
 
-[h2]主角相关[/h2]
+[h2]主角 / NPC 换肤[/h2]
 
 [list]
-[*] 支持 PCC 使用 Skin 目录动态贴图
-[*] 创角面板 / 居民菜单可换肤
+[*] 支持 PCC 使用 Skin 目录，以及 Texture 根目录 / Texture/Skin 的角色贴图
+[*] 换肤窗口默认只列 Skin；底部开关再显示 Texture（按 mod 名标注，不递归 Item 子目录）
+[*] 创角面板 / 居民菜单可给 PC 与 NPC 换肤
+[*] NPC 手动换肤后会播放该皮肤的 ACS，不再停在静态底图
 [*] 仅主角有 [b]move[/b] 状态（_acs_move）
 [*] 控制台：ACS.ListSkins / ACS.SetSkin / ACS.ClearSkin / ACS.ReloadAcs
 [/list]

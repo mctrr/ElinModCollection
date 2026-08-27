@@ -309,13 +309,7 @@ internal class SkinListPatch
         data.scale = 100;
 
         try {
-            if (!data.path.IsEmpty()) {
-                File.WriteAllLines($"{data.path}.ini", [
-                    $"frame={data.frame}",
-                    $"time={data.time}",
-                    $"scale={data.scale}",
-                ]);
-            }
+            AcsClipIni.WriteFrameMeta(data);
         }
         catch (Exception) {
             // 只读路径等：内存 frame 仍正确
@@ -454,6 +448,72 @@ internal class SkinListPatch
     }
 
 
+}
+
+/// <summary>
+/// Vanilla LoadSprites NREs when IO.LoadPNG returns null or frame &lt; 1.
+/// Keep the picker / GetSprite path from blowing up the whole list.
+/// </summary>
+[HarmonyPatch(typeof(SpriteData), nameof(SpriteData.LoadSprites))]
+internal static class SpriteDataLoadSpritesPatch
+{
+    [HarmonyPrefix]
+    internal static bool Prefix(SpriteData __instance)
+    {
+        if (__instance is null) {
+            return false;
+        }
+
+        if (__instance.frame < 1) {
+            __instance.frame = 1;
+        }
+
+        if (__instance.path.IsEmpty()) {
+            EnsureSprites(__instance);
+            return false;
+        }
+
+        string png = __instance.path.EndsWith(".png", StringComparison.OrdinalIgnoreCase)
+            ? __instance.path
+            : __instance.path + ".png";
+        if (!File.Exists(png)) {
+            EnsureSprites(__instance);
+            return false;
+        }
+
+        return true;
+    }
+
+    [HarmonyFinalizer]
+    internal static Exception? Finalizer(SpriteData __instance, Exception? __exception)
+    {
+        if (__exception is null) {
+            return null;
+        }
+
+        try {
+            EnsureSprites(__instance);
+        }
+        catch (Exception) {
+        }
+
+        return null;
+    }
+
+    private static void EnsureSprites(SpriteData data)
+    {
+        if (data is null) {
+            return;
+        }
+
+        if (data.frame < 1) {
+            data.frame = 1;
+        }
+
+        if (data.sprites is null || data.sprites.Length != data.frame) {
+            data.sprites = new Sprite[data.frame];
+        }
+    }
 }
 
 /// <summary>
