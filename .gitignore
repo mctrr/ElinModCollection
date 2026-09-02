@@ -33,3 +33,7 @@ Desktop.ini
 *.log
 *.tmp
 *~
+
+# WorkBuddy replay temp scripts
+.wb_*
+

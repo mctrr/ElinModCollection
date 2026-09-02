@@ -47,6 +47,7 @@ internal class PccRenderPatch
         public int Index;
         public int LastAdvanceFrame = -1;
         public SpriteData? LastClip;
+        public string? LastSig;
     }
 
     [HarmonyPrefix]
@@ -81,9 +82,10 @@ internal class PccRenderPatch
         }
 
         // 记录手持绘制原点（与原版 OnRender 一致），供 ACS 后重绘手持物
+        // 变身/形态切换瞬间 renderer.data 可能为 null（原版正在重建），空防护。
         _org.x = p.x;
         _org.y = p.y;
-        _org.z = p.z + owner.renderer.data.offset.z;
+        _org.z = p.z + (owner.renderer?.data?.offset.z ?? 0f);
 
         // 静态单帧 skin 不推进动画计时
         if (data.frame > 1) {
@@ -161,7 +163,7 @@ internal class PccRenderPatch
         var suffixes = AcsSuffixes.Resolve(o);
         if (suffixes is not null) {
             var clip = o.GetAcsClip(snow, suffixes);
-            if (clip is not null && clip.frame > 1) {
+            if (clip is not null) {
                 owner = o;
                 data = clip;
                 return true;
@@ -190,15 +192,26 @@ internal class PccRenderPatch
         int fc = Time.frameCount;
         if (st.LastAdvanceFrame != fc) {
             st.LastAdvanceFrame = fc;
-            // clip 引用变化（idle↔move/combat…）时从第 0 帧重播
-            if (!ReferenceEquals(st.LastClip, data)) {
+            string? sig = AcsStateResolver.GetOneShotSignature(owner);
+            bool newAction = sig != null && sig != st.LastSig;
+            if (newAction) {
+                // 新一轮一次性动作（攻击/施法/受伤/复活…）：即使 clip 与上一帧是同一个
+                // SpriteData 对象（如 magic 回退共用 combat 图），也必须从头播——
+                // 否则继承战斗姿态的旧帧序号，一两帧就被判“播完”清掉（视觉上加速/闪完）。
+                st.LastSig = sig;
+                st.LastClip = data;
+                st.Timer = 0f;
+                st.Index = 0;
+            }
+            else if (!ReferenceEquals(st.LastClip, data)) {
+                // clip 引用变化（idle↔move/combat…）时从第 0 帧重播
                 st.LastClip = data;
                 st.Timer = 0f;
                 st.Index = 0;
             }
             else {
                 st.Timer += Core.delta;
-                if (st.Timer >= data.time) {
+                if (st.Timer >= data.time && data.time > 0f) {
                     st.Timer -= data.time;
                     st.Index = AcsStateResolver.AdvanceClipIndex(owner, data.frame, st.Index);
                 }

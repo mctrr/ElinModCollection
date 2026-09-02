@@ -25,8 +25,9 @@
 
 [list]
 [*] [b]revive[/b] - 被复活时播放一次复活动作，播完自动回到其它状态
+[*] [b]emote[/b] - PC点表情按钮播一次（当前皮肤有 _acs_emote / emote.* / _acs_greet 才出现）；不消耗回合
 [*] [b]combat[/b] - 战斗中（原版支持；可再拆 sword / polearm / staff）
-[*] [b]move[/b] - 仅主角移动时（资源名 _acs_move）
+[*] [b]move[/b] - 主角 / NPC 移动时（资源名 _acs_move）
 [*] [b]greet[/b] - 见面问候：NPC 看见玩家时自动播放一次问候动画；有 greet1-4 时随机选一张，播完自动回到 idle
 [*] [b]wet[/b] - 潮湿 / 曾在水中
 [*] [b]drunk[/b] - 醉酒
@@ -36,7 +37,7 @@
 [/list]
 
 状态优先级从高到低：
-[code]revive > combat > move(PC) > greet(NPC) > wet > drunk > confused > blind > idle[/code]
+[code]revive > emote > combat > move > greet(NPC) > wet > drunk > confused > blind > idle[/code]
 
 异常状态只在非战斗时生效，战斗中一定显示 combat 动画（施法窗口则显示 mcombat）。
 PC 朝反方向释放敌对法术时，会按目标的屏幕水平方向转身。
@@ -47,7 +48,7 @@ PC 朝反方向释放敌对法术时，会按目标的屏幕水平方向转身�
 
 [list]
 [*] [b]前缀[/b]（可选）：任意皮肤名（手动） / snow（雪地） / married（已婚）
-[*] [b]状态[/b]：revive / combat / move / greet / greet1-4 / wet / drunk / confused / blind / idle（idle 无需写出）
+[*] [b]状态[/b]：revive / emote / combat / move / greet / greet1-4 / wet / drunk / confused / blind / idle（idle 无需写出）
 [/list]
 
 [h3]举个例子[/h3]
@@ -62,6 +63,8 @@ pcr_zhenbu_acs_yongzhuang#41_0-31.png
 pcr_zhenbu_acs_yongzhuang.combat#41_0-27.png
 pcr_zhenbu_acs_yongzhuang.greet#41_0-38.png
 [/code]
+
+没有底图也可以：NPC 表仍写短 id（如 pcr_aimeisi），只放 [b]pcr_aimeisi_acs_idle#66_0-0.png[/b]。BCS 会把这张 idle 当作底图。
 
 [list]
 [*] [b]pcr_zhenbu.png[/b] - 角色基础外观
@@ -125,6 +128,16 @@ _acs_combat
 
 换到没有 combat 的动态皮肤后，战斗时保持当前皮外观（idle / 静态 / 底图），[b]不会[/b]回落到原皮 combat。
 
+[h2]emote[/h2]
+
+[list]
+[*] 当前 PC 皮肤有 _acs_emote / _acs_emote.* / _acs_greet / greet1-4 时，悬停自己出现「表情」按钮（左键 HUD / 全部动作菜单；默认中键常绑全部动作）
+[*] 点击后播一次，不消耗回合；多片时弹菜单自选
+[*] 资源名 _acs_emote / _acs_emote.wave / _acs_greet；前缀同样支持（_acs_snow.emote）
+[*] 没有该片时不显示按钮；走动会打断
+[*] Console: ACS.Emote
+[/list]
+
 [h2]revive 复活动作[/h2]
 
 [list]
@@ -140,6 +153,7 @@ _acs_combat
 [*] 当 NPC 触发 fov 对话气泡（看见玩家主动搭话）时，自动进入 greet
 [*] 若提供 _acs_greet / _acs_greet1 … _acs_greet4，触发时在已有的片里随机锁一张
 [*] greet 播完一轮后自动结束，回到 idle
+[*] PC 也可把 greet 片当表情播
 [*] 没有 greet 资源时自动回退 idle，不会出错
 [*] 触发后约 0.2 秒延迟，避免瞬间切动画
 [/list]
@@ -151,8 +165,8 @@ _acs_combat
 [*] 换肤窗口默认只列 Skin；底部开关再显示 Texture（按 mod 名标注，不递归 Item 子目录）
 [*] 创角面板 / 居民菜单可给 PC 与 NPC 换肤
 [*] NPC 手动换肤后会播放该皮肤的 ACS，不再停在静态底图
-[*] 仅主角有 [b]move[/b] 状态（_acs_move）
-[*] 控制台：ACS.ListSkins / ACS.SetSkin / ACS.ClearSkin / ACS.ReloadAcs
+[*] 主角与 NPC 都有 [b]move[/b] 状态（_acs_move）；没有该片时回退 idle
+[*] 控制台：ACS.ListSkins / ACS.SetSkin / ACS.ClearSkin / ACS.ReloadAcs / ACS.Emote
 [/list]
 
 [h2]原版说明[/h2]

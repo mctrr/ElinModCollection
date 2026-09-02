@@ -34,6 +34,25 @@ internal class RenderFramePatch
     private static bool _vanillaAnimTouched;
 
     /// <summary>
+    /// NPC 侧推进状态：同帧去重 + clip 引用变化时从第 0 帧重播。
+    /// 用独立副本而不直接依赖 actor.spriteTimer/spriteIndex：
+    /// 1) 换肤角色 vanillaTouched=true 时原版与 Postfix 同帧各推一次 → 双倍速；
+    ///    这里仅记录我们这一路的推进，配合 allowAdvance 避免叠加。
+    /// 2) 状态切换（combat→melee→magic…）若不重置帧序号，会从中途/末帧续播：
+    ///    一次性动画瞬间播完 → 看起来“攻击不触发”。
+    /// </summary>
+    private sealed class NpcFrameState
+    {
+        public SpriteData? LastClip;
+        public string? LastSig;
+        public float Timer;
+        public int Index;
+        public int LastFrame;
+    }
+
+    private static readonly Dictionary<int, NpcFrameState> NpcFrames = new();
+
+    /// <summary>
     /// Transpiler：在原版“读取 data.frame”附近插入委托调用，
     /// 把局部变量里的 SpriteData 替换为 GetCurrentAnimatedData 的返回值。
     /// 具体 IL 匹配依赖原版方法结构；游戏大版本更新后若 patch 失败会 ThrowIfInvalid。
@@ -90,10 +109,10 @@ internal class RenderFramePatch
         var suffixes = AcsSuffixes.Resolve(chara);
         if (suffixes is null) {
             // Custom base without ACS: never keep playing race / foreign multi-frame current
-            // (vanilla current can still be sourceCard combat strip after a no-combat reskin).
+            // (vanilla current can still be sourceCard combat/walk strip after a no-move reskin).
             if (!chara.c_idSpriteReplacer.IsEmpty()) {
                 var baseSheet = ResolveBaseSheet(chara);
-                if (baseSheet is not null && !ReferenceEquals(current, baseSheet)) {
+                if (baseSheet is not null) {
                     return baseSheet;
                 }
             }
@@ -112,6 +131,31 @@ internal class RenderFramePatch
             }
 
             return current;
+        }
+
+        // 当前皮有 ACS 但缺本状态片（常见：有 idle 无 move）时，GetAcsClip 会回 idle。
+        // idle 若是单帧，原版 frame<=1 早退仍会把种族多帧 current 播完。钉在 idle/底图。
+        if (data.frame <= 1 && !chara.c_idSpriteReplacer.IsEmpty()
+            && !ReferenceEquals(data, current)) {
+            return data;
+        }
+
+        // 切换 clip（combat→hurt/magic/melee…）时把原版帧序号归零：
+        // 否则 actor.spriteIndex 残留上一 clip 的播放位置（例如 combat 25 帧播到第 20 帧，
+        // 切到 15 帧的 hurt 时 20 >= 14）→ FreezeOneShotBeforeWrap 首帧就误判“末帧”，
+        // 一次性动画刚触发就被清掉（表现为 0.1s 闪完 / 不触发）。
+        int nActorKey = actor.GetInstanceID();
+        if (!NpcFrames.TryGetValue(nActorKey, out var nSt)) {
+            nSt = new NpcFrameState();
+            NpcFrames[nActorKey] = nSt;
+        }
+
+        if (!ReferenceEquals(nSt.LastClip, data)) {
+            nSt.LastClip = data;
+            nSt.Index = 0;
+            nSt.Timer = 0f;
+            SpriteIndexRef(actor) = 0;
+            SpriteTimerRef(actor) = 0f;
         }
 
         // 原版拿到 clip 后还会 spriteIndex++ / wrap。revive/greet 末帧先冻住，避免再闪第 0 帧。
@@ -274,15 +318,25 @@ internal class RenderFramePatch
 
         // 原版 CardActor 用 sourceCard.replacer + 种族 id。
         // 手动换肤后若种族没有 Texture ACS，HasSprite 早退，自定义 ACS 永远不播。
+        // 有 ACS 但缺 move 时 GetCurrent 可能已把 idle 单帧塞进 current，原版仍早退，
+        // 必须再覆盖一次，否则种族行走条会露出来。
         if (!vanillaTouched) {
-            TryApplyCustomSkinAnim(__instance, chara, p);
+            // 原版动画块整体没跑（HasSprite / frame 早退）：由我们全权推进。
+            TryApplyCustomSkinAnim(__instance, chara, p, allowAdvance: true);
+        }
+        else if (!chara.c_idSpriteReplacer.IsEmpty()) {
+            // 原版动画块跑了：Transpiler 已把 SpriteData 换成 ACS clip 且原版本帧在推进。
+            // 这里再 AdvanceAndApply 会与原版各推一次 = 双倍速；只补单帧钉帧场景。
+            TryApplyCustomSkinAnim(__instance, chara, p, allowAdvance: false);
         }
     }
 
     /// <summary>
     /// 原版动画块被跳过时，用当前自定义皮肤的 ACS / 底图推进并覆盖 sr。
+    /// <paramref name="allowAdvance"/>：原版未推进时 true（完整推进多帧）；
+    /// 原版已推进时 false（仅单帧钉帧，多帧交还原版避免双倍速）。
     /// </summary>
-    private static void TryApplyCustomSkinAnim(CardActor actor, Chara chara, RenderParam p)
+    private static void TryApplyCustomSkinAnim(CardActor actor, Chara chara, RenderParam p, bool allowAdvance)
     {
         if (chara.c_idSpriteReplacer.IsEmpty()) {
             return;
@@ -303,7 +357,10 @@ internal class RenderFramePatch
         }
 
         if (data.frame > 1) {
-            AdvanceAndApply(actor, chara, data);
+            if (allowAdvance) {
+                AdvanceAndApply(actor, chara, data);
+            }
+
             return;
         }
 
@@ -313,21 +370,53 @@ internal class RenderFramePatch
 
     private static void AdvanceAndApply(CardActor actor, Chara chara, SpriteData data)
     {
-        float timer = SpriteTimerRef(actor);
-        int index = SpriteIndexRef(actor);
-        timer += Core.delta;
-        if (timer >= data.time && data.time > 0f) {
-            timer -= data.time;
-            index = AcsStateResolver.AdvanceClipIndex(chara, data.frame, index);
+        int actorKey = actor.GetInstanceID();
+        if (!NpcFrames.TryGetValue(actorKey, out var st)) {
+            st = new NpcFrameState();
+            NpcFrames[actorKey] = st;
         }
 
-        SpriteTimerRef(actor) = timer;
-        SpriteIndexRef(actor) = index;
+        int fc = Time.frameCount;
+        if (st.LastFrame != fc) {
+            st.LastFrame = fc;
+            string? sig = AcsStateResolver.GetOneShotSignature(chara);
+            bool newAction = sig != null && sig != st.LastSig;
+            if (newAction) {
+                // 新一轮一次性动作（攻击/施法/受伤…）：即使 clip 与上一帧是同一个
+                // SpriteData 对象（如 magic/melee 回退共用 combat 图），也必须从头播——
+                // 否则继承战斗姿态的旧帧序号，一两帧就被判“播完”清掉（视觉上加速/闪完）。
+                st.LastSig = sig;
+                st.LastClip = data;
+                st.Timer = 0f;
+                st.Index = 0;
+            }
+            else if (!ReferenceEquals(st.LastClip, data)) {
+                // clip 引用变化（idle↔move↔combat↔melee…）：从第 0 帧重播。
+                st.LastClip = data;
+                st.Timer = 0f;
+                st.Index = 0;
+            }
+            else {
+                st.Timer += Core.delta;
+                if (st.Timer >= data.time && data.time > 0f) {
+                    st.Timer -= data.time;
+                    st.Index = AcsStateResolver.AdvanceClipIndex(chara, data.frame, st.Index);
+                }
+            }
+        }
+
+        // 防御：帧数变少时钳制（例如 move 回 idle）
+        if (data.frame > 0 && st.Index >= data.frame) {
+            st.Index = 0;
+        }
+
+        SpriteTimerRef(actor) = st.Timer;
+        SpriteIndexRef(actor) = st.Index;
 
         Sprite? sprite = null;
         try {
             var sprites = data.GetSprites();
-            sprite = sprites.TryGet(index, returnNull: true);
+            sprite = sprites.TryGet(st.Index, returnNull: true);
         }
         catch {
             sprite = data.GetSprite();

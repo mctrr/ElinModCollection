@@ -39,6 +39,7 @@ internal class SkinListPatch
 
         foreach (var entry in __result) {
             NormalizeAcsSuffixes(entry.Value, entry.Key);
+            EnsureBaseFromAcsIdle(entry.Value, entry.Key);
         }
 
         // After native *_bcs_combat: optional Skin/bcs_static_map.ini [combat] fill-ins.
@@ -250,6 +251,71 @@ internal class SkinListPatch
 
             AcsMod.Log($"skin '{logId}' clip '{clip.Name}' with {clip.Length} frames @ {clip.Interval}ms");
         }
+
+        EnsureBaseFromAcsIdle(replacer, logId);
+    }
+
+    /// <summary>
+    /// No base png: use _acs_idle (else first real ACS clip) as suffixes[""] / data
+    /// so HasSprite(id) succeeds for NPC tables that still point at the short id.
+    /// SpriteData.id is rewritten to the short id because vanilla HasSprite reloads
+    /// whenever data.id != requested id.
+    /// </summary>
+    internal static void EnsureBaseFromAcsIdle(SpriteReplacer replacer, string id)
+    {
+        if (replacer?.suffixes is null || id.IsEmpty()) {
+            return;
+        }
+
+        replacer.suffixes.TryGetValue("", out var existing);
+        bool existingIsRealBase = existing is not null
+            && (existing.path.IsEmpty()
+                || existing.path.IndexOf("_acs_", StringComparison.Ordinal) < 0);
+
+        if (existingIsRealBase) {
+            if (replacer.data is null) {
+                replacer.data = existing;
+            }
+
+            if (replacer.data is not null && replacer.data.id != id) {
+                replacer.data.id = id;
+            }
+
+            return;
+        }
+
+        SpriteData? fallback = null;
+        if (replacer.suffixes.TryGetValue("_acs_idle", out var idle) && idle is not null) {
+            fallback = idle;
+        }
+        else {
+            foreach (var kv in replacer.suffixes) {
+                if (kv.Key is null || kv.Value is null || !kv.Key.StartsWith("_acs_")) {
+                    continue;
+                }
+
+                fallback = kv.Value;
+                if (kv.Key == "_acs_idle" || kv.Key.StartsWith("_acs_idle.")) {
+                    break;
+                }
+            }
+        }
+
+        if (fallback is null) {
+            fallback = existing;
+        }
+
+        if (fallback is null) {
+            return;
+        }
+
+        fallback.id = id;
+        replacer.suffixes[""] = fallback;
+        replacer.data = fallback;
+        if (!ReferenceEquals(existing, fallback)) {
+            string file = fallback.path.IsEmpty() ? "_acs_idle" : Path.GetFileName(fallback.path);
+            AcsMod.Log($"skin '{id}' base from ACS idle ({file})");
+        }
     }
 
     /// <summary>
@@ -447,7 +513,42 @@ internal class SkinListPatch
         }
     }
 
+    /// <summary>
+    /// Drop already-sliced ACS sprites so the next ListSkins / display path recuts.
+    /// Used by ACS.ReloadAcs after the user replaces PNGs on disk.
+    /// </summary>
+    internal static void ClearLoadedSprites()
+    {
+        var dict = SpriteReplacer.dictSkins;
+        if (dict is null) {
+            return;
+        }
 
+        foreach (var skin in dict.Values) {
+            if (skin is null) {
+                continue;
+            }
+
+            ClearLoaded(skin.data);
+            if (skin.suffixes is null) {
+                continue;
+            }
+
+            foreach (var data in skin.suffixes.Values) {
+                ClearLoaded(data);
+            }
+        }
+    }
+
+    private static void ClearLoaded(SpriteData? data)
+    {
+        if (data is null) {
+            return;
+        }
+
+        data.sprites = null;
+        data.tex = null;
+    }
 }
 
 /// <summary>
@@ -596,6 +697,7 @@ internal class ReloadSuffixPatch
         }
 
         SkinListPatch.NormalizeAcsSuffixes(__instance, id);
+        SkinListPatch.EnsureBaseFromAcsIdle(__instance, id);
         TryInjectStaticCombatFromDictSkins(__instance, id);
         TryMergeBcsCombatOnReload(__instance, id);
     }

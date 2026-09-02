@@ -68,6 +68,36 @@ internal class PcSkinPatch
     {
         TryApplyPcSkin(__instance);
         BindNpcCustomSkin(__instance);
+        if (__instance is not null && __instance.pccData is null && __instance.isSynced) {
+            EnsureNpcActor(__instance);
+        }
+    }
+
+    /// <summary>
+    /// Vanilla LayerEditSkin / ClearSkin only swap the renderer object.
+    /// The old CardActor stays in scene.syncList, which leaves a ghost sprite
+    /// on the map. Kill it before the new renderer is created.
+    /// </summary>
+    [HarmonyPrefix]
+    [HarmonyPatch(typeof(Chara), nameof(Chara._CreateRenderer))]
+    internal static void OnCreateRendererPrefix(Chara __instance)
+    {
+        var old = __instance.renderer;
+        if (old is null) {
+            return;
+        }
+
+        try {
+            if (old.hasActor) {
+                old.KillActor();
+            }
+
+            old.OnLeaveScreen();
+            EClass.scene?.syncList?.Remove(old);
+        }
+        catch (Exception ex) {
+            AcsMod.Warn($"OnCreateRendererPrefix: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -87,9 +117,20 @@ internal class PcSkinPatch
         }
     }
 
+    /// <summary>
+    /// Vanilla atlas transmute/boost（变身/boost 魔法）：原版条件设置 RendererReplacer
+    /// 而不建 PCC → 此时叠 ACS 会生成 CharaActorPCC with null pccData → NullReference。
+    /// 检测到这种渲染态就不碰皮肤绑定。
+    /// </summary>
+    internal static bool IsVanillaAtlasRender(CharaRenderer? renderer)
+        => renderer is not null && renderer.replacer is not null && renderer.pccData is null;
+
+    internal static bool IsVanillaAtlasRender(Chara? chara)
+        => chara?.renderer is CharaRenderer cr && IsVanillaAtlasRender(cr);
+
     internal static void TryApplyPcSkin(CharaRenderer renderer, bool forceListSkins = false)
     {
-        if (renderer is null || renderer.pccData is null) {
+        if (renderer is null || renderer.pccData is null || IsVanillaAtlasRender(renderer)) {
             return;
         }
 
@@ -113,8 +154,9 @@ internal class PcSkinPatch
 
         var skin = ResolveSkin(baseId);
         if (skin is null || !HasUsableSkin(skin)) {
+            bool dictEmpty = SpriteReplacer.dictSkins is null || SpriteReplacer.dictSkins.Count == 0;
             int fc = Time.frameCount;
-            if (forceListSkins || fc - _lastListSkinsFrame >= 15) {
+            if (forceListSkins || (dictEmpty && fc - _lastListSkinsFrame >= 15)) {
                 _lastListSkinsFrame = fc;
                 try {
                     SpriteReplacer.ListSkins();
@@ -147,6 +189,11 @@ internal class PcSkinPatch
             return;
         }
 
+        // Vanilla atlas transmute/boost：无 PCC 的 RendererReplacer，跳过防 NRE
+        if (IsVanillaAtlasRender(renderer)) {
+            return;
+        }
+
         var owner = renderer.owner;
         if (owner is null || owner.mimicry != null || owner.c_idSpriteReplacer.IsEmpty()) {
             return;
@@ -174,6 +221,58 @@ internal class PcSkinPatch
 
         renderer.data = race;
         renderer.usePass = false;
+        if (renderer.isSynced) {
+            EnsureNpcActor(renderer);
+        }
+    }
+
+    /// <summary>
+    /// Rebuild the live renderer. Prefix on _CreateRenderer kills the old actor.
+    /// </summary>
+    internal static void RecreateRenderer(Chara chara)
+    {
+        chara?._CreateRenderer();
+    }
+
+    /// <summary>
+    /// Tile-pass NPCs have no CardActor. After a custom skin we turn usePass off,
+    /// so an already-on-screen renderer must spawn an actor or the sprite never animates.
+    /// </summary>
+    private static void EnsureNpcActor(CharaRenderer renderer)
+    {
+        if (renderer is null || renderer.hasActor || renderer.usePass) {
+            return;
+        }
+
+        var owner = renderer.owner;
+        if (owner is null) {
+            return;
+        }
+
+        try {
+            CardActor? actor = renderer.data?.CreateActor();
+            if (actor is null) {
+                string actorId = "CharaActor";
+                var ids = owner.sourceCard?.idActor;
+                if (ids is { Length: > 0 } && !ids[0].IsEmpty()) {
+                    actorId = ids[0];
+                }
+
+                actor = PoolManager.Spawn(
+                    Resources.Load<CardActor>("Scene/Render/Actor/" + actorId));
+            }
+
+            if (actor is null) {
+                return;
+            }
+
+            renderer.actor = actor;
+            renderer.hasActor = true;
+            actor.SetOwner(owner);
+        }
+        catch (Exception ex) {
+            AcsMod.Warn($"EnsureNpcActor: {ex.Message}");
+        }
     }
 
     private static void RestoreSpriteReplacerId(Card c, string? id)
@@ -368,10 +467,13 @@ internal static class PcSkinBinder
     private static int _ensureUntilFrame = -1;
     private const int EnsureFrames = 90;
 
-    internal static void Schedule(string reason)
+    internal static bool HasCachedSkins()
+        => SpriteReplacer.dictSkins is { Count: > 0 };
+
+    internal static void Schedule(string reason, bool forceListSkins = true)
     {
         _ensureUntilFrame = Time.frameCount + EnsureFrames;
-        Ensure(reason, forceListSkins: true);
+        Ensure(reason, forceListSkins);
     }
 
     /// <summary>
@@ -415,7 +517,8 @@ internal static class PcSkinBinder
                 }
             }
 
-            if (forceListSkins || reason == "retry" || reason == "ListSkins") {
+            if (forceListSkins || reason == "retry" || reason == "ListSkins"
+                || reason.StartsWith("Scene.Init", StringComparison.Ordinal)) {
                 SkinUi.RebindNpcCustomSkins();
             }
         }
@@ -439,7 +542,7 @@ internal static class PcSkinBinder
                 return;
             }
 
-            Ensure("retry", forceListSkins: Time.frameCount % 30 == 0);
+            Ensure("retry", forceListSkins: false);
         }
         catch (Exception) {
             // 绝不让 postfix 拖垮 Scene.OnUpdate
@@ -457,15 +560,19 @@ internal class GameStartPatch
     [HarmonyPatch(typeof(Game), nameof(Game.Load))]
     internal static void OnGameLoad()
     {
-        PcSkinBinder.Schedule("Game.Load");
+        PcSkinBinder.Schedule("Game.Load", forceListSkins: true);
     }
 
     [HarmonyPostfix]
     [HarmonyPatch(typeof(Scene), nameof(Scene.Init))]
     internal static void OnSceneInit(Scene.Mode newMode)
     {
-        if (newMode is Scene.Mode.StartGame or Scene.Mode.Zone) {
-            PcSkinBinder.Schedule($"Scene.Init({newMode})");
+        if (newMode == Scene.Mode.StartGame) {
+            PcSkinBinder.Schedule($"Scene.Init({newMode})", forceListSkins: !PcSkinBinder.HasCachedSkins());
+        }
+        else if (newMode == Scene.Mode.Zone) {
+            // Zone travel must rebind only. ListSkins rebuilds every PCR clip from scratch.
+            PcSkinBinder.Schedule($"Scene.Init({newMode})", forceListSkins: false);
         }
     }
 
@@ -502,7 +609,7 @@ internal static class PcSkinCommands
         }
 
         pc.c_idSpriteReplacer = skinId;
-        pc._CreateRenderer();
+        PcSkinPatch.RecreateRenderer(pc);
         if (pc.renderer is CharaRenderer cr) {
             PcSkinPatch.TryApplyPcSkin(cr);
         }
@@ -518,7 +625,7 @@ internal static class PcSkinCommands
         }
 
         pc.c_idSpriteReplacer = null;
-        pc._CreateRenderer();
+        PcSkinPatch.RecreateRenderer(pc);
         return "PC skin cleared.";
     }
 
@@ -540,9 +647,47 @@ internal static class PcSkinCommands
         return sb.ToString();
     }
 
+    [ConsoleCommand("")]
+    public static string Emote(string clip = "")
+    {
+        var pc = EClass.pc;
+        if (pc is null) {
+            return "PC not found.";
+        }
+
+        var states = AcsStateResolver.ListEmoteStates(pc);
+        if (states.Count == 0) {
+            return "No emote ACS clip on current skin.";
+        }
+
+        if (clip.IsEmpty()) {
+            if (states.Count == 1) {
+                return AcsStateResolver.StartEmote(pc, states[0])
+                    ? "Emote started: " + states[0]
+                    : "Failed to start emote.";
+            }
+
+            return "Usage: ACS.Emote <clip>  clips: " + string.Join(", ", states);
+        }
+
+        string resolved = clip;
+        if (!states.Contains(resolved)) {
+            if (states.Contains("emote." + clip)) {
+                resolved = "emote." + clip;
+            }
+            else {
+                return "Unknown clip '" + clip + "'. clips: " + string.Join(", ", states);
+            }
+        }
+
+        return AcsStateResolver.StartEmote(pc, resolved)
+            ? "Emote started: " + resolved
+            : "Failed to start emote.";
+    }
+
     /// <summary>
-    /// 换 PNG 后不重开游戏：清 lift/pad/帧缓存 → ListSkins → 重绑 PC。
-    /// 不热换 DLL；仅资源与运行时缓存。
+    /// Reload PNG without restart: clear lift/pad/frame caches, ListSkins, rebind PC.
+    /// Does not hot-swap the DLL; resources and runtime caches only.
     /// </summary>
     [ConsoleCommand("")]
     public static string ReloadAcs()
@@ -554,6 +699,7 @@ internal static class PcSkinCommands
             ACS.API.StaticCombatMap.Invalidate();
 
             TextureSkinCatalog.Invalidate();
+            SkinListPatch.ClearLoadedSprites();
             SpriteReplacer.ListSkins();
             PcSkinBinder.Ensure("ReloadAcs", forceListSkins: false);
 
@@ -601,22 +747,17 @@ internal static class SkinUi
         }
 
         try {
-            if (c.renderer is CharaRenderer cr) {
-                if (cr.pccData is not null) {
-                    PcSkinPatch.TryApplyPcSkin(cr, forceListSkins: true);
-                }
-                else if (!c.c_idSpriteReplacer.IsEmpty()) {
-                    c._CreateRenderer();
-                }
-
+            if (c.renderer is CharaRenderer { pccData: not null } cr) {
+                PcSkinPatch.TryApplyPcSkin(cr, forceListSkins: true);
                 c.renderer?.RefreshSprite();
+                return;
             }
-            else if (!c.c_idSpriteReplacer.IsEmpty()) {
-                c._CreateRenderer();
-                if (c.renderer is CharaRenderer cr2 && cr2.pccData is not null) {
-                    PcSkinPatch.TryApplyPcSkin(cr2, forceListSkins: true);
-                }
+
+            if (c.renderer is CharaRenderer npc) {
+                PcSkinPatch.BindNpcCustomSkin(npc);
             }
+
+            c.renderer?.RefreshSprite();
         }
         catch (Exception ex) {
             AcsMod.Warn($"RebindAfterSkinEdit: {ex.Message}");
@@ -635,7 +776,6 @@ internal static class SkinUi
                 return;
             }
 
-            int rebuilt = 0;
             foreach (var chara in map.charas) {
                 if (chara is null || chara.IsPC || chara.c_idSpriteReplacer.IsEmpty()) {
                     continue;
@@ -650,19 +790,7 @@ internal static class SkinUi
 
                 if (chara.renderer is CharaRenderer npc) {
                     PcSkinPatch.BindNpcCustomSkin(npc);
-                    if (chara.spriteReplacer is null) {
-                        chara._CreateRenderer();
-                        rebuilt++;
-                    }
                 }
-                else {
-                    chara._CreateRenderer();
-                    rebuilt++;
-                }
-            }
-
-            if (rebuilt > 0) {
-                AcsMod.Log($"rebound {rebuilt} NPC custom-skin renderer(s)");
             }
         }
         catch (Exception ex) {

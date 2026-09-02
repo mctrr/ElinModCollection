@@ -20,6 +20,12 @@ public static class AcsStateResolver
     /// <summary>本次 greet 锁定的状态名：greet / greet1 / greet2 / greet3 / greet4。</summary>
     private const string GreetVariantKey = "acs_greet_n";
 
+    /// <summary>emote one-shot flag (mapStr timestamp).</summary>
+    private const string EmoteFlagKey = "acs_emote";
+
+    /// <summary>Locked emote clip state: emote / emote.wave / ...</summary>
+    private const string EmoteVariantKey = "acs_emote_n";
+
     /// <summary>
     /// PC 主动攻击后 combat ACS 保持回合数。
     /// 复用原版 <see cref="Chara.combatCount"/>（Chara.Tick 每回合 -1）。
@@ -40,11 +46,17 @@ public static class AcsStateResolver
     // combat weapon key cache: Equip/Unequip refresh, avoid per-frame body/category
     private static readonly Dictionary<int, string?> MainHandCombatWeaponKeyByUid = new();
 
-    // PC mcombat facing: true = screen-right (flip), false = screen-left
+    // PC magic facing: true = screen-right (flip), false = screen-left
     private static readonly Dictionary<int, bool> MagicFaceRightByUid = new();
 
+    // PC melee facing: true = screen-right (flip), false = screen-left
+    private static readonly Dictionary<int, bool> MeleeFaceRightByUid = new();
+
+    // PC ranged facing: true = screen-right (flip), false = screen-left
+    private static readonly Dictionary<int, bool> RangedFaceRightByUid = new();
+
     /// <summary>
-    /// 基础状态优先级：revive(动作) > 战斗 > 移动(仅 PC) > greet(NPC) > 异常 > idle
+    /// 基础状态优先级：revive > emote > hurt > magic > melee > ranged > cmove > combat > move > greet(NPC) > status > idle
     /// </summary>
     public static string GetState(Chara chara)
     {
@@ -53,17 +65,44 @@ public static class AcsStateResolver
             return "revive";
         }
 
-        // 魔法攻击窗口 > 普通 combat
+        // Player-triggered emote: above combat so the button pose is visible.
+        // Walking cancels it; combat does not (clicking emote in combat still plays).
+        if (IsEmoteActive(chara)) {
+            if (IsMoving(chara)) {
+                StopEmote(chara);
+            }
+            else {
+                return GetEmoteState(chara);
+            }
+        }
+
+        if (IsHurtActive(chara)) {
+            return "hurt";
+        }
+
+        // 魔法 / 近战 / 远程窗口 > 战斗中移动 > 普通 combat
         if (IsMagicCombatActive(chara)) {
-            return "mcombat";
+            return "magic";
+        }
+
+        if (IsMeleeActive(chara)) {
+            return "melee";
+        }
+
+        if (IsRangedActive(chara)) {
+            return "ranged";
         }
 
         if (IsCombatVisual(chara)) {
+            if (IsMoving(chara)) {
+                return "cmove";
+            }
+
             return "combat";
         }
 
-        // 资源名 _acs_move；NPC 格子移动不需要 walk ACS
-        if (chara.IsPC && IsPcMoving(chara)) {
+        // 资源名 _acs_move；PC 用轴/寻路粘滞，NPC 只看格子插值 isMoving
+        if (IsMoving(chara)) {
             return "move";
         }
 
@@ -171,16 +210,16 @@ public static class AcsStateResolver
 
 
     /// <summary>
-    /// mcombat（魔法攻击）手动标记键（mapStr）。与 combat 窗口同机制：
+    /// magic（魔法攻击）手动标记键（mapStr）。与 combat 窗口同机制：
     /// <see cref="MarkActiveMagicCombat"/> 写入 combatCount + 该标记，
     /// 倒计时复用原版 <see cref="Chara.combatCount"/>（Chara.Tick 每回合 -1），
     /// 耗尽即自动清标记（见 <see cref="IsMagicCombatActive"/>）。
     /// </summary>
-    public const string MagicCombatFlagKey = "acs_mcombat";
+    public const string MagicCombatFlagKey = "acs_magic";
 
     /// <summary>
-    /// 是否处于魔法攻击（mcombat）窗口。**优先级高于普通 combat**：
-    /// <see cref="GetState"/> 先判 mcombat 再判 combat。
+    /// 是否处于魔法攻击（magic）窗口。**优先级高于普通 combat**：
+    /// <see cref="GetState"/> 先判 magic 再判 combat。
     ///
     /// 触发：<see cref="MarkActiveMagicCombat"/>（原版施放敌对法术时，见
     /// StatePatches 的 Chara.UseAbility 补丁）。非施法状态 / 窗口耗尽自动退出，
@@ -188,26 +227,18 @@ public static class AcsStateResolver
     /// </summary>
     public static bool IsMagicCombatActive(Chara chara)
     {
+        // 纯 flag 判定：一次性施法动画只由渲染播完清理（TryFinishOneShot）。
+        // 不再依赖 combatCount——它会被脱离战斗 / 受击等原版逻辑清零，
+        // 动画播到一半被掐断（表现为只播 2~3 帧）。
         if (chara is null) {
             return false;
         }
 
-        if (!chara.mapStr.ContainsKey(MagicCombatFlagKey)) {
-            return false;
-        }
-
-        // 窗口耗尽：清标记并退出（下次渲染自动回落到 combat / idle）
-        if (chara.combatCount <= 0) {
-            chara.mapStr.Remove(MagicCombatFlagKey);
-            ClearMagicFace(chara);
-            return false;
-        }
-
-        return true;
+        return chara.mapStr.ContainsKey(MagicCombatFlagKey);
     }
 
     /// <summary>
-    /// 开 mcombat 窗口：写入 combatCount=5 + 标记（PC / NPC 通用）。
+    /// 开 magic 窗口：写入 combatCount=5 + 标记（PC / NPC 通用）。
     /// 持续施法会不断续期；停止施法 5 回合后自动结束。
     /// </summary>
     public static void MarkActiveMagicCombat(Chara chara)
@@ -217,17 +248,248 @@ public static class AcsStateResolver
         }
 
         chara.combatCount = CombatHoldTurns;
-        chara.mapStr.Set(MagicCombatFlagKey, "1");
+        // 值存触发时刻（版本戳）：渲染端据此识别“新的一次施法”，即使 clip 与上次同一
+        // 对象（combat 回退共用图）也从第 0 帧重播，不会续旧帧序号造成秒播完/加速。
+        chara.mapStr.Set(MagicCombatFlagKey, Time.realtimeSinceStartup.ToString("F3"));
+        ClearMelee(chara);
+        ClearRanged(chara);
     }
 
-    /// <summary>手动强制 mcombat（测试 / 外部调用）。</summary>
+    /// <summary>手动强制 magic（测试 / 外部调用）。</summary>
     public static void ForceMagicCombat(Chara chara) => MarkActiveMagicCombat(chara);
 
-    /// <summary>立即结束 mcombat 窗口（测试 / 外部调用）。</summary>
+    /// <summary>立即结束 magic 窗口（测试 / 外部调用）。</summary>
     public static void ClearMagicCombat(Chara chara)
     {
         chara?.mapStr.Remove(MagicCombatFlagKey);
         ClearMagicFace(chara);
+    }
+
+    /// <summary>
+    /// melee window flag (mapStr). Same mechanism as magic:
+    /// <see cref="MarkActiveMelee"/> writes combatCount + this flag,
+    /// countdown reuses vanilla <see cref="Chara.combatCount"/> (Chara.Tick -1 / turn),
+    /// and the flag is cleared when the window expires (see <see cref="IsMeleeActive"/>).
+    /// </summary>
+    public const string MeleeFlagKey = "acs_melee";
+
+    /// <summary>
+    /// Whether the melee attack window is active. Lower than magic, higher than combat:
+    /// <see cref="GetState"/> checks magic, then melee, then combat.
+    ///
+    /// Trigger: <see cref="MarkActiveMelee"/> (vanilla ActMelee.Attack, PC / NPC).
+    /// Window expiry falls back to combat or idle.
+    /// </summary>
+    public static bool IsMeleeActive(Chara chara)
+    {
+        // 纯 flag 判定：一次性近战动画只由渲染播完清理（TryFinishOneShot）。
+        // 不再依赖 combatCount——它会被脱离战斗 / 受击等原版逻辑清零，
+        // 动画播到一半被掐断（表现为只播 2~3 帧）。
+        if (chara is null) {
+            return false;
+        }
+
+        return chara.mapStr.ContainsKey(MeleeFlagKey);
+    }
+
+    /// <summary>
+    /// Open the melee window: combatCount=5 + flag (PC / NPC).
+    /// Repeated melee refreshes it; 5 turns after the last melee it ends.
+    /// </summary>
+    public static void MarkActiveMelee(Chara chara)
+    {
+        if (chara is null || chara.isDead) {
+            return;
+        }
+
+        chara.combatCount = CombatHoldTurns;
+        // 值存触发时刻（版本戳）：渲染端据此识别“新的一次攻击”，即使 clip 与上次同一
+        // 对象（combat 回退共用图）也从第 0 帧重播，不会续旧帧序号造成秒播完/加速。
+        chara.mapStr.Set(MeleeFlagKey, Time.realtimeSinceStartup.ToString("F3"));
+        ClearMagicCombat(chara);
+        ClearRanged(chara);
+        if (chara.IsPC) {
+            MarkActiveCombat(chara);
+        }
+    }
+
+    /// <summary>Force melee (tests / external callers).</summary>
+    public static void ForceMelee(Chara chara) => MarkActiveMelee(chara);
+
+    /// <summary>End the melee window immediately (tests / external callers).</summary>
+    public static void ClearMelee(Chara chara)
+    {
+        chara?.mapStr.Remove(MeleeFlagKey);
+        ClearMeleeFace(chara);
+    }
+
+    /// <summary>
+    /// PC melee: lock left/right facing from target relative position
+    /// (isometric screenX ~ mapX+mapZ). Pure vertical screen axis is ignored.
+    /// Cleared when the window ends.
+    /// </summary>
+    public static void SetMeleeFaceFromTarget(Chara chara, Card? tc, Point? pos)
+    {
+        if (chara is null || chara.pos is null) {
+            return;
+        }
+
+        Point? target = ResolveMagicTargetPoint(chara, tc, pos);
+        if (target is null) {
+            return;
+        }
+
+        float screenH = (target.x - chara.pos.x) + (target.z - chara.pos.z);
+        if (Mathf.Abs(screenH) <= 0.01f) {
+            return;
+        }
+
+        MeleeFaceRightByUid[chara.uid] = screenH > 0f;
+    }
+
+    public static bool TryGetMeleeFaceRight(Chara chara, out bool faceRight)
+    {
+        faceRight = false;
+        if (chara is null || !IsMeleeActive(chara)) {
+            if (chara is not null) {
+                ClearMeleeFace(chara);
+            }
+
+            return false;
+        }
+
+        return MeleeFaceRightByUid.TryGetValue(chara.uid, out faceRight);
+    }
+
+    public static void ClearMeleeFace(Chara? chara)
+    {
+        if (chara is null) {
+            return;
+        }
+
+        MeleeFaceRightByUid.Remove(chara.uid);
+    }
+
+    /// <summary>hurt one-shot flag (mapStr timestamp), same pattern as revive.</summary>
+    private const string HurtFlagKey = "acs_hurt";
+
+    public const string RangedFlagKey = "acs_ranged";
+
+    public static bool IsHurtActive(Chara chara)
+    {
+        if (chara is null || !chara.mapStr.TryGetValue(HurtFlagKey, out string value)) {
+            return false;
+        }
+
+        if (!float.TryParse(value, out float activateAt)) {
+            return false;
+        }
+
+        return Time.realtimeSinceStartup >= activateAt;
+    }
+
+    public static void StartHurt(Chara chara)
+    {
+        if (chara is null || chara.isDead) {
+            return;
+        }
+
+        // 受击打断当前攻击/施法动作：hurt 优先级最高，冲突时只播 hurt。
+        // 若不清 melee/magic，hurt 播完 TryFinishOneShot 后会续播攻击（“先攻击又立刻受伤”）。
+        ClearMagicCombat(chara);
+        ClearMelee(chara);
+        ClearRanged(chara);
+
+        chara.mapStr.Set(HurtFlagKey, Time.realtimeSinceStartup.ToString());
+    }
+
+    public static void StopHurt(Chara chara)
+    {
+        chara?.mapStr.Remove(HurtFlagKey);
+    }
+
+    public static bool IsRangedActive(Chara chara)
+    {
+        if (chara is null) {
+            return false;
+        }
+
+        if (!chara.mapStr.ContainsKey(RangedFlagKey)) {
+            return false;
+        }
+
+        if (chara.combatCount <= 0) {
+            chara.mapStr.Remove(RangedFlagKey);
+            ClearRangedFace(chara);
+            return false;
+        }
+
+        return true;
+    }
+
+    public static void MarkActiveRanged(Chara chara)
+    {
+        if (chara is null || chara.isDead) {
+            return;
+        }
+
+        chara.combatCount = CombatHoldTurns;
+        chara.mapStr.Set(RangedFlagKey, "1");
+        ClearMelee(chara);
+        ClearMagicCombat(chara);
+        if (chara.IsPC) {
+            MarkActiveCombat(chara);
+        }
+    }
+
+    public static void ForceRanged(Chara chara) => MarkActiveRanged(chara);
+
+    public static void ClearRanged(Chara chara)
+    {
+        chara?.mapStr.Remove(RangedFlagKey);
+        ClearRangedFace(chara);
+    }
+
+    public static void SetRangedFaceFromTarget(Chara chara, Card? tc, Point? pos)
+    {
+        if (chara is null || chara.pos is null) {
+            return;
+        }
+
+        Point? target = ResolveMagicTargetPoint(chara, tc, pos);
+        if (target is null) {
+            return;
+        }
+
+        float screenH = (target.x - chara.pos.x) + (target.z - chara.pos.z);
+        if (Mathf.Abs(screenH) <= 0.01f) {
+            return;
+        }
+
+        RangedFaceRightByUid[chara.uid] = screenH > 0f;
+    }
+
+    public static bool TryGetRangedFaceRight(Chara chara, out bool faceRight)
+    {
+        faceRight = false;
+        if (chara is null || !IsRangedActive(chara)) {
+            if (chara is not null) {
+                ClearRangedFace(chara);
+            }
+
+            return false;
+        }
+
+        return RangedFaceRightByUid.TryGetValue(chara.uid, out faceRight);
+    }
+
+    public static void ClearRangedFace(Chara? chara)
+    {
+        if (chara is null) {
+            return;
+        }
+
+        RangedFaceRightByUid.Remove(chara.uid);
     }
 
     /// <summary>
@@ -392,11 +654,16 @@ public static class AcsStateResolver
     {
         ClearMainHandCombatWeaponKeyCache();
         MagicFaceRightByUid.Clear();
+        MeleeFaceRightByUid.Clear();
+        RangedFaceRightByUid.Clear();
 
         try {
             var pc = EClass.pc;
             if (pc != null) {
                 ClearCombat(pc);
+                ClearMelee(pc);
+                ClearRanged(pc);
+                StopHurt(pc);
             }
         }
         catch {
@@ -427,10 +694,13 @@ public static class AcsStateResolver
         // 刚好耗尽：检测 1 次视野
         if (HasHostileInFov(pc)) {
             pc.combatCount = CombatHoldTurns;
+            ClearMelee(pc);
+            ClearRanged(pc);
             return;
         }
 
         ClearCombat(pc);
+        ClearMelee(pc);
     }
 
     private static bool IsActiveCombatWindow(Chara pc)
@@ -478,6 +748,22 @@ public static class AcsStateResolver
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// 是否应播 move ACS。PC 走轴/寻路粘滞；NPC 只看 CharaRenderer.isMoving。
+    /// </summary>
+    public static bool IsMoving(Chara chara)
+    {
+        if (chara is null) {
+            return false;
+        }
+
+        if (chara.IsPC) {
+            return IsPcMoving(chara);
+        }
+
+        return chara.renderer is CharaRenderer { IsMoving: true };
     }
 
     /// <summary>
@@ -685,6 +971,7 @@ public static class AcsStateResolver
             return;
         }
 
+        StopEmote(chara);
         chara.mapStr.Set(ReviveFlagKey, Time.realtimeSinceStartup.ToString());
     }
 
@@ -694,7 +981,48 @@ public static class AcsStateResolver
     }
 
     public static bool IsOneShotActive(Chara chara)
-        => IsReviveActive(chara) || IsGreetActive(chara);
+        => IsReviveActive(chara) || IsHurtActive(chara)
+           || IsMagicCombatActive(chara) || IsMeleeActive(chara)
+           || IsEmoteActive(chara) || IsGreetActive(chara);
+
+    /// <summary>
+    /// 当前激活的一次性动作“版本签名”（按 GetState 优先级取最高一个）。
+    /// 渲染端用它判断是否“新一轮动作”：即使命中同一个 SpriteData（如 magic/melee
+    /// 回退共用 combat 图），只要签名变化就从第 0 帧重播；否则续旧帧序号会瞬间播完。
+    /// </summary>
+    public static string? GetOneShotSignature(Chara? chara)
+    {
+        if (chara is null || chara.mapStr is null) {
+            return null;
+        }
+
+        string? v;
+        if (chara.mapStr.TryGetValue(ReviveFlagKey, out v) && !v.IsEmpty()) {
+            return "rev:" + v;
+        }
+
+        if (chara.mapStr.TryGetValue(HurtFlagKey, out v) && !v.IsEmpty()) {
+            return "hurt:" + v;
+        }
+
+        if (chara.mapStr.TryGetValue(MagicCombatFlagKey, out v) && !v.IsEmpty()) {
+            return "mag:" + v;
+        }
+
+        if (chara.mapStr.TryGetValue(MeleeFlagKey, out v) && !v.IsEmpty()) {
+            return "mel:" + v;
+        }
+
+        if (chara.mapStr.TryGetValue(EmoteFlagKey, out v) && !v.IsEmpty()) {
+            return "emo:" + v;
+        }
+
+        if (chara.mapStr.TryGetValue(GreetVariantKey, out v) && !v.IsEmpty()) {
+            return "greet:" + v;
+        }
+
+        return null;
+    }
 
     public static bool TryFinishOneShot(Chara chara)
     {
@@ -707,6 +1035,32 @@ public static class AcsStateResolver
             return true;
         }
 
+        if (IsHurtActive(chara)) {
+            StopHurt(chara);
+            return true;
+        }
+
+        // magic（施法起手）：播完一轮即停、不循环；随后回 combat / idle。
+        // 直查 flag 而非 IsMagicCombatActive：后者在 combatCount<=0 时会自行清 flag
+        // 并返回 false，导致动画 wrap 回第 0 帧闪一下。
+        if (chara.mapStr.ContainsKey(MagicCombatFlagKey)) {
+            ClearMagicCombat(chara);
+            return true;
+        }
+
+        // melee（近战 atk）：播完一轮即停、不循环；随后回 combat / idle。
+        // 直查 flag 而非 IsMeleeActive：后者在 combatCount<=0 时会自行清 flag 并返回
+        // false，导致这里误判"非 one-shot"而让动画 wrap 回第 0 帧闪一下。
+        if (chara.mapStr.ContainsKey(MeleeFlagKey)) {
+            ClearMelee(chara);
+            return true;
+        }
+
+        if (IsEmoteActive(chara)) {
+            StopEmote(chara);
+            return true;
+        }
+
         if (IsGreetActive(chara)) {
             StopGreet(chara);
             return true;
@@ -716,7 +1070,7 @@ public static class AcsStateResolver
     }
 
     /// <summary>
-    /// 推进帧。revive / greet 播完最后一帧后停在末帧并清标记，
+    /// Advance frame. revive / emote / greet freeze on last frame then clear，
     /// 不要 wrap 回第 0 帧（否则会再闪开头几帧）。
     /// </summary>
     public static int AdvanceClipIndex(Chara chara, int frame, int index)
@@ -765,6 +1119,160 @@ public static class AcsStateResolver
         if (frame <= 1 || index >= frame - 1) {
             TryFinishOneShot(chara);
         }
+    }
+
+    // ---------------- emote ----------------
+
+    public static bool IsEmoteState(string? state)
+        => state == "emote" || (state is not null && state.StartsWith("emote."));
+
+    public static bool IsGreetClipState(string? state)
+        => state == "greet"
+            || state == "greet1"
+            || state == "greet2"
+            || state == "greet3"
+            || state == "greet4";
+
+    public static bool IsEmoteClipState(string? state)
+        => IsEmoteState(state) || IsGreetClipState(state);
+
+    public static bool IsEmoteActive(Chara chara)
+    {
+        if (chara is null || !chara.mapStr.TryGetValue(EmoteFlagKey, out string value)) {
+            return false;
+        }
+
+        if (!float.TryParse(value, out float activateAt)) {
+            return false;
+        }
+
+        return Time.realtimeSinceStartup >= activateAt;
+    }
+
+    public static string GetEmoteState(Chara chara)
+    {
+        if (chara.mapStr.TryGetValue(EmoteVariantKey, out string variant)
+            && !variant.IsEmpty()
+            && IsEmoteState(variant)) {
+            return variant;
+        }
+
+        return "emote";
+    }
+
+    /// <summary>
+    /// Start a one-shot emote. Empty state picks the only available clip;
+    /// pass a clip name (emote / emote.wave / greet) to play that one.
+    /// </summary>
+    public static bool StartEmote(Chara chara, string? state = null)
+    {
+        if (chara is null) {
+            return false;
+        }
+
+        var states = ListEmoteStates(chara);
+        if (states.Count == 0) {
+            return false;
+        }
+
+        if (state.IsEmpty()) {
+            if (states.Count != 1) {
+                return false;
+            }
+
+            state = states[0];
+        }
+        else if (!states.Contains(state)) {
+            return false;
+        }
+
+        chara.mapStr.Set(EmoteFlagKey, Time.realtimeSinceStartup.ToString());
+        chara.mapStr.Set(EmoteVariantKey, state);
+        return true;
+    }
+
+    public static void StopEmote(Chara chara)
+    {
+        if (chara is null) {
+            return;
+        }
+
+        chara.mapStr.Remove(EmoteFlagKey);
+        chara.mapStr.Remove(EmoteVariantKey);
+    }
+
+    public static bool HasEmoteClip(Chara? chara)
+        => ListEmoteStates(chara, stopAtFirst: true).Count > 0;
+
+    public static List<string> ListEmoteStates(Chara? chara, bool stopAtFirst = false)
+    {
+        var suffixes = AcsSuffixes.Resolve(chara);
+        if (suffixes is null || suffixes.Count == 0) {
+            return new List<string>();
+        }
+
+        return CollectEmoteStates(suffixes, CurrentPrefix(chara), stopAtFirst);
+    }
+
+    private static string? CurrentPrefix(Chara? chara)
+    {
+        if (chara is null) {
+            return null;
+        }
+
+        bool snow = EClass.core is not null
+            && EClass.core.IsGameStarted
+            && EClass._zone is not null
+            && EClass._zone.IsSnowCovered;
+        return GetPrefix(chara, snow);
+    }
+
+    /// <summary>
+    /// Unique emote states on this skin. If the current prefix has any emote*
+    /// clip, unprefixed ones are ignored (same as other ACS prefix lookups).
+    /// </summary>
+    private static List<string> CollectEmoteStates(
+        Dictionary<string, SpriteData> suffixes,
+        string? prefix,
+        bool stopAtFirst)
+    {
+        var prefixed = new List<string>();
+        var unprefixed = new List<string>();
+        string prefixHead = prefix is null ? "" : "_acs_" + prefix + ".";
+
+        foreach (var kv in suffixes) {
+            if (kv.Key is null || kv.Value is null || !kv.Key.StartsWith("_acs_")) {
+                continue;
+            }
+
+            string name = kv.Key.Substring("_acs_".Length);
+            if (prefix is not null && kv.Key.StartsWith(prefixHead)) {
+                string rest = kv.Key.Substring(prefixHead.Length);
+                if (IsEmoteState(rest) && !prefixed.Contains(rest)) {
+                    prefixed.Add(rest);
+                    if (stopAtFirst) {
+                        return prefixed;
+                    }
+                }
+
+                continue;
+            }
+
+            if (!IsEmoteState(name)) {
+                continue;
+            }
+
+            if (!unprefixed.Contains(name)) {
+                unprefixed.Add(name);
+                if (stopAtFirst && prefix is null) {
+                    return unprefixed;
+                }
+            }
+        }
+
+        var result = prefixed.Count > 0 ? prefixed : unprefixed;
+        result.Sort(System.StringComparer.Ordinal);
+        return result;
     }
 
     // ---------------- eat ----------------

@@ -176,6 +176,7 @@ internal static class TextureSkinCatalog
 
         SpriteReplacer.dictSkins[id] = replacer;
         SkinListPatch.NormalizeAcsSuffixes(replacer, id);
+        SkinListPatch.EnsureBaseFromAcsIdle(replacer, id);
         return replacer;
     }
 
