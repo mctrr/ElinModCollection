@@ -196,6 +196,7 @@ internal class SkinListPatch
         if (!dictSkins.TryGetValue(baseId, out var baseSkin)) {
             // 无底图时用 ACS skin 充当 base，保证 LayerEditSkin 列表可显示
             baseSkin = acsSkin;
+            acsData.id = baseId;
             baseSkin.data = acsData;
             dictSkins[baseId] = baseSkin;
             dictSkins.Remove(acsSkinId);
@@ -440,9 +441,9 @@ internal class SkinListPatch
     }
 
     /// <summary>
-    /// ?????????? frame/scale????????????????
-    /// ???frame ??? sprites ???? strip???????
-    /// ???????? meta ???????????? path / ????
+    /// 确保 ACS clip 的 frame/scale/time/sprites 一致：
+    /// 按文件名 clip 修正 frame 数并切好 sprites（横向 strip 等分）；
+    /// meta（时长/缩放）已就绪的不重复处理，只补 Point 过滤。
     /// </summary>
     internal static void EnsureAcsSprites(SpriteData data)
     {
@@ -450,14 +451,14 @@ internal class SkinListPatch
             return;
         }
 
-        // ?????????? meta ????????? Point ???????????
+        // meta 已就绪（frame/scale/time 正确且 sprites 已按帧切开）：只补 Point 过滤后返回
         if (data.frame > 0
             && data.scale == 100
             && data.time > 0f
             && data.sprites is { Length: > 0 } sprites
             && sprites.Length == data.frame
             && sprites[0] is not null) {
-            // ??????????????? strip?????
+            // 已切好但可能是整条未切 strip（frame==1 且宽高异常）时仍需处理
             bool looksLikeUncutStrip = data.frame == 1
                 && sprites[0].texture is not null
                 && sprites[0].rect.width > sprites[0].texture.height * 1.5f;
@@ -471,7 +472,7 @@ internal class SkinListPatch
 
         var clip = ResolveClipFromPath(data);
         if (clip is not { Length: > 0 }) {
-            // ??????????? Point??? Bilinear ??
+            // 无法从路径解析 clip（非 ACS）：仅确保 Point 过滤（Bilinear 会糊像素）
             ApplyPointFilter(data);
             return;
         }
@@ -491,7 +492,7 @@ internal class SkinListPatch
             || data.sprites.Length == 0
             || data.sprites[0] is null;
 
-        // ?????????????????frame ?? 1 ???????
+        // meta 骗过但实际是整条 strip：frame 记为 1、单帧宽度异常时强制重新切分
         if (!needSlice && data.sprites is { Length: 1 } && data.sprites[0] is not null) {
             try {
                 var s0 = data.sprites[0];
@@ -709,14 +710,14 @@ internal class ReloadSuffixPatch
                 return;
             }
 
-            // ??????
+            // 路径为空 / 加载失败：跳过
             if (replacer.suffixes.TryGetValue(PcSkinPatch.StaticCombatSuffix, out var existing)
                 && existing is not null) {
                 return;
             }
 
             // ListSkins ?? *_bcs_combat ??? base ? Remove ?? key?
-            // ????? dictSkins[id] ???? key ????????
+            // 修正 data.id 对齐 dictSkins[id] 的 key（防原版 HasSprite 按错误 id 反复重载）
             SpriteData? combatData = null;
             string? source = null;
 

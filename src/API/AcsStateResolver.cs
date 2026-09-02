@@ -90,7 +90,7 @@ public static class AcsStateResolver
         }
 
         if (IsRangedActive(chara)) {
-            return "ranged";
+            return "range";
         }
 
         if (IsCombatVisual(chara)) {
@@ -162,9 +162,9 @@ public static class AcsStateResolver
     }
 
     /// <summary>
-    /// combat ????????????????????????
-    /// ?? <c>sword</c> / <c>polearm</c> / <c>staff</c>???????? null???? _acs_combat??
-    /// ??? chara.uid ???Equip/Unequip ????
+    /// combat 状态按主手武器拆键：
+    /// 持 <c>sword</c> / <c>polearm</c> / <c>staff</c> 时取对应后缀键；
+    /// 空手/其它武器为 null，回退无武器的 _acs_combat。按 chara.uid 缓存，Equip/Unequip 时失效。
     /// </summary>
     public static string? GetMainHandCombatWeaponKey(Chara chara)
     {
@@ -182,7 +182,7 @@ public static class AcsStateResolver
         return key;
     }
 
-    /// <summary>??????????? null????/?????</summary>
+    /// <summary>重新计算并缓存主手武器键（换主手/Equip 后调用）。</summary>
     public static void RefreshMainHandCombatWeaponKey(Chara chara)
     {
         if (chara is null) {
@@ -192,7 +192,7 @@ public static class AcsStateResolver
         MainHandCombatWeaponKeyByUid[chara.uid] = ComputeMainHandCombatWeaponKey(chara);
     }
 
-    /// <summary>??????????????????</summary>
+    /// <summary>使主手武器键缓存失效（卸下/Unequip 后调用）。</summary>
     public static void InvalidateMainHandCombatWeaponKey(Chara chara)
     {
         if (chara is null) {
@@ -202,7 +202,7 @@ public static class AcsStateResolver
         MainHandCombatWeaponKeyByUid.Remove(chara.uid);
     }
 
-    /// <summary>?? ACS / ??????</summary>
+    /// <summary>清空全部武器键缓存（ReloadAcs 等用）。</summary>
     public static void ClearMainHandCombatWeaponKeyCache()
     {
         MainHandCombatWeaponKeyByUid.Clear();
@@ -599,7 +599,7 @@ public static class AcsStateResolver
                 return null;
             }
 
-            // skill ????????????
+            // 按技能类型映射武器键
             switch (cat.skill) {
                 case SkillSword:
                     return "sword";
@@ -609,7 +609,7 @@ public static class AcsStateResolver
                     return "staff";
             }
 
-            // ???????????/?? skill ????
+            // 子技能树节点也归到主武器键（如剑专精下的变体）
             if (cat.IsChildOf("sword")) {
                 return "sword";
             }
@@ -649,7 +649,7 @@ public static class AcsStateResolver
         chara?.mapStr.Remove(CombatFlagKey);
     }
 
-    /// <summary>???????? PC ????????? combat ?????</summary>
+    /// <summary>清除主手武器键 / 施法·近战朝向缓存，并把 PC 残留的一次性窗口一并清掉（切图 / Reload 用）。</summary>
     public static void ClearHostileScanCache()
     {
         ClearMainHandCombatWeaponKeyCache();
@@ -971,7 +971,14 @@ public static class AcsStateResolver
             return;
         }
 
+        // 清掉可能残留的 emote/受击/攻击/施法标记：死亡后 mapStr 不清空，
+        // 若残留会在 revive 播完后立刻补播一次攻击/受击动作。
         StopEmote(chara);
+        StopHurt(chara);
+        ClearMagicCombat(chara);
+        ClearMelee(chara);
+        ClearRanged(chara);
+        StopGreet(chara);
         chara.mapStr.Set(ReviveFlagKey, Time.realtimeSinceStartup.ToString());
     }
 
@@ -981,9 +988,9 @@ public static class AcsStateResolver
     }
 
     public static bool IsOneShotActive(Chara chara)
-        => IsReviveActive(chara) || IsHurtActive(chara)
-           || IsMagicCombatActive(chara) || IsMeleeActive(chara)
-           || IsEmoteActive(chara) || IsGreetActive(chara);
+        => IsReviveActive(chara) || IsEmoteActive(chara)
+           || IsHurtActive(chara) || IsMagicCombatActive(chara) || IsMeleeActive(chara)
+           || IsGreetActive(chara);
 
     /// <summary>
     /// 当前激活的一次性动作“版本签名”（按 GetState 优先级取最高一个）。
@@ -1001,6 +1008,11 @@ public static class AcsStateResolver
             return "rev:" + v;
         }
 
+        // 顺序与 GetState 一致：emote(按钮) 高于 hurt/magic/melee
+        if (chara.mapStr.TryGetValue(EmoteFlagKey, out v) && !v.IsEmpty()) {
+            return "emo:" + v;
+        }
+
         if (chara.mapStr.TryGetValue(HurtFlagKey, out v) && !v.IsEmpty()) {
             return "hurt:" + v;
         }
@@ -1011,10 +1023,6 @@ public static class AcsStateResolver
 
         if (chara.mapStr.TryGetValue(MeleeFlagKey, out v) && !v.IsEmpty()) {
             return "mel:" + v;
-        }
-
-        if (chara.mapStr.TryGetValue(EmoteFlagKey, out v) && !v.IsEmpty()) {
-            return "emo:" + v;
         }
 
         if (chara.mapStr.TryGetValue(GreetVariantKey, out v) && !v.IsEmpty()) {
@@ -1035,29 +1043,28 @@ public static class AcsStateResolver
             return true;
         }
 
+        // emote(按钮) 与 GetState 同序：先清自己，避免把并发的 hurt/magic/melee 误清。
+        if (IsEmoteActive(chara)) {
+            StopEmote(chara);
+            return true;
+        }
+
         if (IsHurtActive(chara)) {
             StopHurt(chara);
             return true;
         }
 
         // magic（施法起手）：播完一轮即停、不循环；随后回 combat / idle。
-        // 直查 flag 而非 IsMagicCombatActive：后者在 combatCount<=0 时会自行清 flag
-        // 并返回 false，导致动画 wrap 回第 0 帧闪一下。
+        // 直接查 flag（纯标记，值=触发时刻版本戳）。
         if (chara.mapStr.ContainsKey(MagicCombatFlagKey)) {
             ClearMagicCombat(chara);
             return true;
         }
 
         // melee（近战 atk）：播完一轮即停、不循环；随后回 combat / idle。
-        // 直查 flag 而非 IsMeleeActive：后者在 combatCount<=0 时会自行清 flag 并返回
-        // false，导致这里误判"非 one-shot"而让动画 wrap 回第 0 帧闪一下。
+        // 直接查 flag（纯标记，值=触发时刻版本戳）。
         if (chara.mapStr.ContainsKey(MeleeFlagKey)) {
             ClearMelee(chara);
-            return true;
-        }
-
-        if (IsEmoteActive(chara)) {
-            StopEmote(chara);
             return true;
         }
 

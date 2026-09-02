@@ -189,10 +189,9 @@ internal class PcSkinPatch
             return;
         }
 
-        // Vanilla atlas transmute/boost：无 PCC 的 RendererReplacer，跳过防 NRE
-        if (IsVanillaAtlasRender(renderer)) {
-            return;
-        }
+        // 注意：不能在这里用 IsVanillaAtlasRender 拦截——非 PCC 的 NPC 一律 pccData==null
+        // 且 replacer 常非 null，那样会把所有 NPC 换肤都当成“atlas 变身”跳过（曾踩过、
+        // 已回滚）。atlas 变身防护只在 TryApplyPcSkin（PC 侧）保留。
 
         var owner = renderer.owner;
         if (owner is null || owner.mimicry != null || owner.c_idSpriteReplacer.IsEmpty()) {
@@ -567,6 +566,11 @@ internal class GameStartPatch
     [HarmonyPatch(typeof(Scene), nameof(Scene.Init))]
     internal static void OnSceneInit(Scene.Mode newMode)
     {
+        // 切图 / 新游戏：所有角色渲染器重建，per-actor 帧推进/朝向/战斗贴图缓存作废。
+        // 不清会按 GetInstanceID 越攒越多（NPC 进出场后字典只增不删）。
+        PccRenderPatch.ClearRuntimeCaches();
+        RenderFramePatch.ClearRuntimeCaches();
+
         if (newMode == Scene.Mode.StartGame) {
             PcSkinBinder.Schedule($"Scene.Init({newMode})", forceListSkins: !PcSkinBinder.HasCachedSkins());
         }

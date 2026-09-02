@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Reflection.Emit;
 using ACS.API;
@@ -150,7 +151,16 @@ internal class RenderFramePatch
             NpcFrames[nActorKey] = nSt;
         }
 
-        if (!ReferenceEquals(nSt.LastClip, data)) {
+        // 切换 clip（combat→hurt/magic/melee…）或“新一轮一次性动作”时把原版帧序号归零。
+        // 只看 clip 引用不够：magic/melee 缺专属片回退共用 combat 图时对象不变，新动作会
+        // 继承旧播放位置，Freeze 首帧即误判“末帧”掐断（攻击 2-3 帧 / 不触发）。
+        string? npcSig = AcsStateResolver.GetOneShotSignature(chara);
+        bool npcNewAction = npcSig != null && npcSig != nSt.LastSig;
+        if (npcNewAction || !ReferenceEquals(nSt.LastClip, data)) {
+            if (npcNewAction) {
+                nSt.LastSig = npcSig;
+            }
+
             nSt.LastClip = data;
             nSt.Index = 0;
             nSt.Timer = 0f;
@@ -235,6 +245,15 @@ internal class RenderFramePatch
     // 同一 actor 连续战斗帧时，避免每帧重复 SetTexture / SetPropertyBlock
     private static readonly Dictionary<int, int> _combatAppliedSpriteIds = new();
     private static readonly Dictionary<int, bool> _combatAppliedFlip = new();
+
+    /// <summary>切图/新游戏时角色渲染器全量重建：清 per-actor 帧推进与战斗贴图缓存防泄漏。</summary>
+    internal static void ClearRuntimeCaches()
+    {
+        NpcFrames.Clear();
+        _combatSpriteActors.Clear();
+        _combatAppliedSpriteIds.Clear();
+        _combatAppliedFlip.Clear();
+    }
 
     // 将 SpriteData 的第一帧应用到 CardActor 的 sr 和 mpb
     private static void ApplySpriteToActor(CardActor actor, SpriteData spriteData, bool force = false)
@@ -334,7 +353,7 @@ internal class RenderFramePatch
     /// <summary>
     /// 原版动画块被跳过时，用当前自定义皮肤的 ACS / 底图推进并覆盖 sr。
     /// <paramref name="allowAdvance"/>：原版未推进时 true（完整推进多帧）；
-    /// 原版已推进时 false（仅单帧钉帧，多帧交还原版避免双倍速）。
+    /// 原版已推进时 false（只同步当前帧贴图/_Rect，不再二次推进帧避免双倍速）。
     /// </summary>
     private static void TryApplyCustomSkinAnim(CardActor actor, Chara chara, RenderParam p, bool allowAdvance)
     {
@@ -356,9 +375,21 @@ internal class RenderFramePatch
             return;
         }
 
+        // 确保切好的帧切片就绪（data.frame 修正 / sprites 切分 / Point filter / time）。
+        // 渲染每帧都查一次成本低，换来的是 strip 一定按帧显示，不会整条 1920 宽出屏。
+        if (!data.path.IsEmpty()
+            && data.path.IndexOf("_acs_", StringComparison.Ordinal) >= 0) {
+            SkinListPatch.EnsureAcsSprites(data);
+        }
+
         if (data.frame > 1) {
             if (allowAdvance) {
                 AdvanceAndApply(actor, chara, data);
+            }
+            else {
+                // 原版在推进多帧；同步显示原版当前 index 的那一帧（重写 _Rect 保证
+                // shader 采样到对应切片，idle 底图 UV 不会残留）。
+                ApplyClipFrame(actor, data, SpriteIndexRef(actor));
             }
 
             return;
@@ -412,11 +443,21 @@ internal class RenderFramePatch
 
         SpriteTimerRef(actor) = st.Timer;
         SpriteIndexRef(actor) = st.Index;
+        ApplyClipFrame(actor, data, st.Index);
+    }
+
+    /// <summary>按 index 应用一帧：EnsureAcsSprites 校正后取 sprites[index] 并覆盖 sr。</summary>
+    private static void ApplyClipFrame(CardActor actor, SpriteData data, int index)
+    {
+        if (!data.path.IsEmpty()
+            && data.path.IndexOf("_acs_", StringComparison.Ordinal) >= 0) {
+            SkinListPatch.EnsureAcsSprites(data);
+        }
 
         Sprite? sprite = null;
         try {
             var sprites = data.GetSprites();
-            sprite = sprites.TryGet(st.Index, returnNull: true);
+            sprite = sprites.TryGet(index, returnNull: true);
         }
         catch {
             sprite = data.GetSprite();
@@ -428,9 +469,10 @@ internal class RenderFramePatch
     }
 
     /// <summary>
-    /// Vanilla OnRender animation only swaps sr.sprite / _MainTex.
-    /// Do not rewrite _Rect / _PixelHeight: RefreshSprite already laid those out from the base sprite.
-    /// Changing them to ACS-frame UVs is what sank the NPC sprite.
+    /// Elin chara shader samples via _Rect, not Unity sprite UVs.
+    /// Idle-as-base skins bake idle UVs in RefreshSprite; switching to another
+    /// frame/combat clip must rewrite _Rect/_PixelHeight or the NPC keeps sampling
+    /// the idle slice (combat/strip frames look wrong).
     /// </summary>
     private static void ApplySpriteToActor(CardActor actor, Sprite sprite, bool force = false)
     {
@@ -451,11 +493,23 @@ internal class RenderFramePatch
         }
 
         actor.sr.sprite = sprite;
+        actor.sr.flipX = flip;
         if (sprite.texture.filterMode != FilterMode.Point) {
             sprite.texture.filterMode = FilterMode.Point;
         }
 
         actor.mpb.SetTexture("_MainTex", sprite.texture);
+        Texture2D tex = sprite.texture;
+        Rect tr = sprite.textureRect;
+        float x0 = tr.x / (float)tex.width;
+        float x1 = tr.xMax / (float)tex.width;
+        float y0 = tr.yMin / (float)tex.height;
+        float y1 = tr.yMax / (float)tex.height;
+        Vector4 rect = flip
+            ? new Vector4(x1, y0, x0, y1)
+            : new Vector4(x0, y0, x1, y1);
+        actor.mpb.SetVector("_Rect", rect);
+        actor.mpb.SetFloat("_PixelHeight", sprite.rect.height);
         actor.sr.SetPropertyBlock(actor.mpb);
         _combatAppliedSpriteIds[actorId] = spriteId;
         _combatAppliedFlip[actorId] = flip;
