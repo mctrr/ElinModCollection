@@ -40,6 +40,7 @@ internal class SkinListPatch
         foreach (var entry in __result) {
             NormalizeAcsSuffixes(entry.Value, entry.Key);
             EnsureBaseFromAcsIdle(entry.Value, entry.Key);
+            SkinChangeWatcher.TrackSkin(entry.Value);
         }
 
         // After native *_bcs_combat: optional Skin/bcs_static_map.ini [combat] fill-ins.

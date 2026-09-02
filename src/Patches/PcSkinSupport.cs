@@ -585,6 +585,7 @@ internal class GameStartPatch
     internal static void OnSceneUpdate()
     {
         PcSkinBinder.TickRetry();
+        SkinChangeWatcher.Tick(Time.frameCount);
     }
 }
 
@@ -694,7 +695,10 @@ internal static class PcSkinCommands
     /// Does not hot-swap the DLL; resources and runtime caches only.
     /// </summary>
     [ConsoleCommand("")]
-    public static string ReloadAcs()
+    public static string ReloadAcs() => ReloadAcsCore();
+
+    /// <summary>手动命令与自动热重载共用的重载主体。</summary>
+    internal static string ReloadAcsCore()
     {
         try {
             AcsSpritePresenter.ClearCaches();
@@ -705,16 +709,36 @@ internal static class PcSkinCommands
             TextureSkinCatalog.Invalidate();
             SkinListPatch.ClearLoadedSprites();
             SpriteReplacer.ListSkins();
+            // ListSkins 已把 watcher 文件基线更新为磁盘最新值；清 pending 防自触发
+            SkinChangeWatcher.ResetBaseline();
             PcSkinBinder.Ensure("ReloadAcs", forceListSkins: false);
+
+            // 强制在场换肤角色重烘焙（静态底图 idle 的 _Rect / 贴图靠 RefreshSprite
+            // 刷新；改图后不主动刷会一直显示旧烘焙结果）。
+            int refreshed = 0;
+            var map = EClass._map;
+            if (map?.charas != null) {
+                foreach (var c in map.charas) {
+                    if (c is null || c.IsPC || c.c_idSpriteReplacer.IsEmpty()) {
+                        continue;
+                    }
+
+                    if (c.renderer is CharaRenderer cr) {
+                        cr.RefreshSprite();
+                        refreshed++;
+                    }
+                }
+            }
 
             var pc = EClass.pc;
             if (pc is null) {
-                return "ACS caches cleared + ListSkins done (no PC).";
+                return $"ACS caches cleared + ListSkins done (no PC). NPC refreshed={refreshed}";
             }
 
+            pc.renderer?.RefreshSprite();
             int clips = AcsSuffixes.CountClips(pc.spriteReplacer);
             bool hasStatic = PcSkinPatch.GetStaticSkinData(pc.spriteReplacer) is not null;
-            return $"ACS reloaded: id={pc.c_idSpriteReplacer} clips={clips} static={hasStatic}";
+            return $"ACS reloaded: id={pc.c_idSpriteReplacer} clips={clips} static={hasStatic} npcRefreshed={refreshed}";
         }
         catch (Exception ex) {
             return $"ReloadAcs failed: {ex.Message}";
