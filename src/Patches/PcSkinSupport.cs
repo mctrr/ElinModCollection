@@ -595,7 +595,7 @@ internal class GameStartPatch
 /// </summary>
 internal static class PcSkinCommands
 {
-    [ConsoleCommand("")]
+    [ConsoleCommand("ACS.SetSkin")]
     public static string SetSkin(string skinId)
     {
         var pc = EClass.pc;
@@ -622,7 +622,7 @@ internal static class PcSkinCommands
         return $"PC skin set to '{skinId}'.";
     }
 
-    [ConsoleCommand("")]
+    [ConsoleCommand("ACS.ClearSkin")]
     public static string ClearSkin()
     {
         var pc = EClass.pc;
@@ -635,7 +635,7 @@ internal static class PcSkinCommands
         return "PC skin cleared.";
     }
 
-    [ConsoleCommand("")]
+    [ConsoleCommand("ACS.ListSkins")]
     public static string ListSkins()
     {
         SpriteReplacer.ListSkins();
@@ -653,7 +653,7 @@ internal static class PcSkinCommands
         return sb.ToString();
     }
 
-    [ConsoleCommand("")]
+    [ConsoleCommand("ACS.Emote")]
     public static string Emote(string clip = "")
     {
         var pc = EClass.pc;
@@ -695,7 +695,7 @@ internal static class PcSkinCommands
     /// Reload PNG without restart: clear lift/pad/frame caches, ListSkins, rebind PC.
     /// Does not hot-swap the DLL; resources and runtime caches only.
     /// </summary>
-    [ConsoleCommand("")]
+    [ConsoleCommand("ACS.ReloadAcs")]
     public static string ReloadAcs() => ReloadAcsCore();
 
     /// <summary>手动命令与自动热重载共用的重载主体。</summary>
@@ -704,6 +704,7 @@ internal static class PcSkinCommands
         try {
             AcsSpritePresenter.ClearCaches();
             PccRenderPatch.ClearRuntimeCaches();
+            RenderFramePatch.ClearRuntimeCaches(); // NPC 侧：帧推进 + 战斗贴图“已应用”去重
             AcsStateResolver.ClearHostileScanCache();
             ACS.API.StaticCombatMap.Invalidate();
 
@@ -792,6 +793,9 @@ internal static class PcSkinCommands
                     }
                 }
             }
+
+            // 1.5) 清 NPC 侧帧推进/战斗去重缓存，防改图后旧帧被“已应用”去重钉住
+            RenderFramePatch.ClearRuntimeCaches();
 
             // 2) 只刷新“用到被改皮肤的”在场角色（静态底图靠 RefreshSprite 重烘焙 _Rect）
             int refreshed = 0;

@@ -135,9 +135,49 @@ internal static class SkinChangeWatcher
             return;
         }
 
-        string key = path.EndsWith(".png", StringComparison.OrdinalIgnoreCase)
-            ? path
-            : path + ".png";
+        TrackPng(path);
+    }
+
+    /// <summary>
+    /// ListSkins 后补 Track 不并进 ListSkins 的 Texture 系皮肤（NPC 用的贴图目录：
+    /// 底图 png + 同目录 {baseId}*.png 的 _acs_ / _bcs_combat clip）。否则这些文件
+    /// 不在基线里，改了磁盘也不会触发热加载——这正是“给 NPC 换的 skin 不热更”的根因。
+    /// </summary>
+    internal static void TrackTextureSkins()
+    {
+        try {
+            foreach (var entry in TextureSkinCatalog.ListBaseItems()) {
+                TrackPng(entry.Path); // 底图（无 .png 后缀）
+                try {
+                    string? dir = Path.GetDirectoryName(entry.Path + ".png");
+                    if (dir.IsEmpty() || !Directory.Exists(dir)) {
+                        continue;
+                    }
+
+                    foreach (var f in Directory.GetFiles(dir, entry.Id + "*.png", SearchOption.TopDirectoryOnly)) {
+                        TrackPng(f);
+                    }
+                }
+                catch (Exception) {
+                    // 单目录枚举失败不影响其它条目
+                }
+            }
+        }
+        catch (Exception ex) {
+            ACS.AcsMod.Warn($"TrackTextureSkins: {ex.Message}");
+        }
+    }
+
+    /// <summary>把单个皮肤 png（或裸路径）记入基线：路径幂等 + 上限保护。</summary>
+    private static void TrackPng(string pngOrBarePath)
+    {
+        if (LastStamp.Count >= MaxTrackedFiles) {
+            return;
+        }
+
+        string key = pngOrBarePath.EndsWith(".png", StringComparison.OrdinalIgnoreCase)
+            ? pngOrBarePath
+            : pngOrBarePath + ".png";
         if (!File.Exists(key)) {
             return;
         }

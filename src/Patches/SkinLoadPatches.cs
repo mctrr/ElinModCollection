@@ -43,6 +43,14 @@ internal class SkinListPatch
             SkinChangeWatcher.TrackSkin(entry.Value);
         }
 
+        // 补 Track 不并进 ListSkins 的 Texture 系皮肤（NPC 贴图目录），让热加载能覆盖到
+        try {
+            SkinChangeWatcher.TrackTextureSkins();
+        }
+        catch (Exception) {
+            // 基线跟踪失败不应破坏 ListSkins 本身
+        }
+
         // After native *_bcs_combat: optional Skin/bcs_static_map.ini [combat] fill-ins.
         foreach (var mapped in StaticCombatMapApply.ApplyToDictSkins(__result)) {
             staticCombatMerges.Add(new StaticCombatMerge(mapped.BaseId, mapped.Data));
