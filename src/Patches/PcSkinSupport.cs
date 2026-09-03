@@ -593,9 +593,15 @@ internal class GameStartPatch
 /// <summary>
 /// 控制台：ACS.SetSkin / ClearSkin / ListSkins。
 /// </summary>
+/// <summary>
+/// 控制台命令。类级 <see cref="ConsoleCommandClassCustomizerAttribute"/> 把 ReflexCLI
+/// 默认的“命名空间.类名”前缀（ACS.Patches.PcSkinCommands）覆盖成短前缀 ACS，
+/// 命令即注册为 ACS.SetSkin / ACS.ReloadAcs 等。
+/// </summary>
+[ConsoleCommandClassCustomizer("ACS")]
 internal static class PcSkinCommands
 {
-    [ConsoleCommand("ACS.SetSkin")]
+    [ConsoleCommand]
     public static string SetSkin(string skinId)
     {
         var pc = EClass.pc;
@@ -695,7 +701,7 @@ internal static class PcSkinCommands
     /// Reload PNG without restart: clear lift/pad/frame caches, ListSkins, rebind PC.
     /// Does not hot-swap the DLL; resources and runtime caches only.
     /// </summary>
-    [ConsoleCommand("ACS.ReloadAcs")]
+    [ConsoleCommand]
     public static string ReloadAcs() => ReloadAcsCore();
 
     /// <summary>手动命令与自动热重载共用的重载主体。</summary>
