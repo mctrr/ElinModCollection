@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using ACS.API;
 using HarmonyLib;
@@ -744,6 +745,123 @@ internal static class PcSkinCommands
             return $"ReloadAcs failed: {ex.Message}";
         }
     }
+
+    /// <summary>
+    /// 热更两级入口：
+    ///  - <paramref name="structural"/>（ini 变更 / 文件删除 / 无变更集）→ 全量 ReloadAcsCore
+    ///  - 纯 PNG 内容变化 → 只失效对应 SpriteData + 只刷新用到它的在场角色，避免
+    ///    ListSkins 重建数百 PCR 皮肤导致的主线程 1-2 秒卡顿。
+    /// </summary>
+    internal static string ReloadChangedSkins(bool structural, string[] changedFiles)
+    {
+        try {
+            if (structural || changedFiles is null || changedFiles.Length == 0) {
+                return ReloadAcsCore();
+            }
+
+            // 变更路径归一为“无 .png 后缀”以便与 SpriteData.path 匹配
+            var paths = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string f in changedFiles) {
+                string p = f;
+                if (p.EndsWith(".png", StringComparison.OrdinalIgnoreCase)) {
+                    p = p.Substring(0, p.Length - 4);
+                }
+
+                paths.Add(p);
+            }
+
+            // 1) 失效命中的 SpriteData（懒加载路径会在下次渲染时重读磁盘新 PNG）
+            int invalidated = 0;
+            var skins = SpriteReplacer.dictSkins;
+            if (skins != null) {
+                foreach (var skin in skins.Values) {
+                    if (skin is null) {
+                        continue;
+                    }
+
+                    if (InvalidateIfHit(skin.data, paths)) {
+                        invalidated++;
+                    }
+
+                    if (skin.suffixes != null) {
+                        foreach (var sd in skin.suffixes.Values) {
+                            if (InvalidateIfHit(sd, paths)) {
+                                invalidated++;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2) 只刷新“用到被改皮肤的”在场角色（静态底图靠 RefreshSprite 重烘焙 _Rect）
+            int refreshed = 0;
+            var map = EClass._map;
+            if (map?.charas != null) {
+                foreach (var c in map.charas) {
+                    if (c is null || c.IsPC || c.c_idSpriteReplacer.IsEmpty()) {
+                        continue;
+                    }
+
+                    if (ReplacerTouches(c.spriteReplacer, paths)
+                        && c.renderer is CharaRenderer cr) {
+                        cr.RefreshSprite();
+                        refreshed++;
+                    }
+                }
+            }
+
+            var pc = EClass.pc;
+            if (pc is not null
+                && ReplacerTouches(pc.spriteReplacer, paths)
+                && pc.renderer is CharaRenderer pcr) {
+                pcr.RefreshSprite();
+                refreshed++;
+            }
+
+            return $"ACS hot-reloaded: {invalidated} sprite(s) invalidated, {refreshed} actor(s) refreshed"
+                   + (structural ? " (full)" : " (light)");
+        }
+        catch (Exception ex) {
+            AcsMod.Warn($"ReloadChangedSkins failed: {ex.Message}; falling back to full reload");
+            return ReloadAcsCore();
+        }
+    }
+
+    private static bool InvalidateIfHit(SpriteData? data, HashSet<string> paths)
+    {
+        if (data is null || data.path.IsEmpty() || !paths.Contains(data.path)) {
+            return false;
+        }
+
+        SkinListPatch.InvalidateData(data);
+        return true;
+    }
+
+    private static bool ReplacerTouches(SpriteReplacer? replacer, HashSet<string> paths)
+    {
+        if (replacer is null) {
+            return false;
+        }
+
+        if (DataTouches(replacer.data, paths)) {
+            return true;
+        }
+
+        if (replacer.suffixes is null) {
+            return false;
+        }
+
+        foreach (var sd in replacer.suffixes.Values) {
+            if (DataTouches(sd, paths)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool DataTouches(SpriteData? data, HashSet<string> paths)
+        => data is not null && !data.path.IsEmpty() && paths.Contains(data.path);
 }
 
 /// <summary>

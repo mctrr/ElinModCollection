@@ -551,6 +551,9 @@ internal class SkinListPatch
         data.sprites = null;
         data.tex = null;
     }
+
+    /// <summary>热更用：只失效单个 SpriteData 的贴图/切片缓存（懒加载会重读磁盘）。</summary>
+    internal static void InvalidateData(SpriteData? data) => ClearLoaded(data);
 }
 
 /// <summary>

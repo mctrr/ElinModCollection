@@ -9,7 +9,13 @@ namespace ACS.Patches;
 /// <summary>
 /// 皮肤文件热更检测（作者调试用）：只在“游戏切回前台”时扫一次受管皮肤 png/ini 的
 /// LastWriteTime（工作流 = 切出去改图 → 切回看效果）。检测到变化后等待“稳定窗口”
-/// （文件写完不再变化）再自动执行 ReloadAcsCore；兜底命令 ACS.ReloadAcs。
+/// （文件写完不再变化）再触发重载。兜底命令 ACS.ReloadAcs。
+///
+/// 重载分两级，避免每次全量 ListSkins 卡 1-2 秒：
+///  - 纯 PNG 内容变化（最常见：改图重导）→ 只失效被改的 SpriteData + 只刷新用了
+///    该皮肤的在场角色（轻量，几乎无感）
+///  - 结构性变化（ini 变更 / 文件被删，影响 clip 解析或 key 集合）→ 走全量
+///    ReloadAcsCore（ListSkins + 全场 RefreshSprite）
 ///
 /// 为什么等稳定窗口：导出器写文件是分步的，若在写入中途触发重载会读到半截 PNG/ini。
 /// </summary>
@@ -21,13 +27,17 @@ internal static class SkinChangeWatcher
     private static readonly Dictionary<string, long> LastStamp = new(); // 文件全路径 → LastWriteTimeUtc.Ticks
     private static long _pendingSinceTicks;
     private static bool _wasFocused = true; // 上次 Tick 时的前台状态（true=启动即前台）
+    private static bool _pendingStructural;
+    private static readonly HashSet<string> PendingFiles = new();
 
     /// <summary>重载完成后清除“待重载”状态。
-    /// 文件基线不清空：ReloadAcsCore 内部 ListSkins 会经 TrackSkin 把 LastStamp 更新为
-    /// 磁盘最新值，自动对齐基线；清空反而会让 watcher 失去跟踪目标。</summary>
+    /// 文件基线不清空：全量重载的 ListSkins 会经 TrackSkin 把 LastStamp 更新为磁盘
+    /// 最新值；轻量重载不清基线（懒加载读的就是新文件）。清空反而失去跟踪目标。</summary>
     internal static void ResetBaseline()
     {
         _pendingSinceTicks = 0;
+        _pendingStructural = false;
+        PendingFiles.Clear();
     }
 
     internal static void Tick(int frameCount)
@@ -48,15 +58,20 @@ internal static class SkinChangeWatcher
         _wasFocused = false; // 后台：什么都不做，等切回前台那一下
     }
 
-    /// <summary>扫一次磁盘基线；有变化则重置稳定窗口起点（等文件写完不再变）。</summary>
+    /// <summary>扫一次磁盘基线；有变化则记录变更集并重置稳定窗口起点。</summary>
     private static void ScanNow()
     {
-        if (ScanChanged()) {
+        if (ScanChanged(out var files, out bool structural)) {
+            _pendingStructural = _pendingStructural || structural;
+            foreach (string f in files) {
+                PendingFiles.Add(f);
+            }
+
             _pendingSinceTicks = DateTime.UtcNow.Ticks;
         }
     }
 
-    /// <summary>文件已稳定超过窗口则执行自动重载（前台/后台共用）。</summary>
+    /// <summary>文件已稳定超过窗口则触发重载（前台/后台共用）。</summary>
     private static void TryFireStable()
     {
         if (_pendingSinceTicks == 0) {
@@ -67,10 +82,16 @@ internal static class SkinChangeWatcher
             return;
         }
 
+        string[] files = new List<string>(PendingFiles).ToArray();
+        bool structural = _pendingStructural;
         _pendingSinceTicks = 0;
+        _pendingStructural = false;
+        PendingFiles.Clear();
+
         try {
-            AcsMod.Log("[AutoReload] skin files changed on disk; reloading textures...");
-            string r = PcSkinCommands.ReloadAcsCore();
+            AcsMod.Log($"[AutoReload] {files.Length} skin file(s) changed"
+                + (structural ? " (structural)" : "") + "; reloading...");
+            string r = PcSkinCommands.ReloadChangedSkins(structural, files);
             AcsMod.Log("[AutoReload] " + r);
         }
         catch (Exception ex) {
@@ -78,6 +99,8 @@ internal static class SkinChangeWatcher
         }
         finally {
             _pendingSinceTicks = 0;
+            _pendingStructural = false;
+            PendingFiles.Clear();
         }
     }
 
@@ -102,7 +125,8 @@ internal static class SkinChangeWatcher
 
     /// <summary>记录一份 skin 数据所属目录，供轮询。幂等、带文件数上限。</summary>
     internal static void Track(SpriteData? data)
-    {        if (data is null || LastStamp.Count >= MaxTrackedFiles) {
+    {
+        if (data is null || LastStamp.Count >= MaxTrackedFiles) {
             return;
         }
 
@@ -131,9 +155,16 @@ internal static class SkinChangeWatcher
         }
     }
 
-    private static bool ScanChanged()
+    /// <summary>
+    /// 扫描基线：返回是否有变化；<paramref name="changedFiles"/> = mtime 变化的文件；
+    /// <paramref name="structural"/> = 含 ini 变更或文件被删（需要全量重建）。
+    /// </summary>
+    private static bool ScanChanged(out HashSet<string> changedFiles, out bool structural)
     {
-        // 删除的文件：从基线移除并视为变化（保守处理）
+        changedFiles = new HashSet<string>();
+        structural = false;
+
+        // 被删除的文件：从基线移除并视为结构性变化（key 集合变化 → 全量）
         if (LastStamp.Count > 0) {
             List<string>? gone = null;
             foreach (var kv in LastStamp) {
@@ -147,19 +178,20 @@ internal static class SkinChangeWatcher
                     LastStamp.Remove(g);
                 }
 
-                return true;
+                structural = true;
             }
         }
 
-        bool changed = false;
         // 键在扫描中可能被 Track 增删，复制一份避免枚举时修改
         foreach (string key in new List<string>(LastStamp.Keys)) {
             try {
                 long t = File.GetLastWriteTimeUtc(key).Ticks;
-                if (LastStamp.TryGetValue(key, out long old)) {
-                    if (old != t) {
-                        changed = true;
-                        LastStamp[key] = t;
+                if (LastStamp.TryGetValue(key, out long old) && old != t) {
+                    LastStamp[key] = t;
+                    changedFiles.Add(key);
+                    // ini = clip meta（帧数/时长/名字解析），会影响 key 集 → 全量
+                    if (key.EndsWith(".ini", StringComparison.OrdinalIgnoreCase)) {
+                        structural = true;
                     }
                 }
             }
@@ -167,6 +199,6 @@ internal static class SkinChangeWatcher
             }
         }
 
-        return changed;
+        return structural || changedFiles.Count > 0;
     }
 }
