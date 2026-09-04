@@ -26,7 +26,9 @@ internal class PccRenderPatch
     private static bool _tempsSaved;
 
     // 按 actor 分状态推进帧，避免多 PCC 共享 _sharedTimer 串帧
-    private static readonly Dictionary<int, FrameState> FrameByActor = new Dictionary<int, FrameState>();
+    // 逐帧推进状态机（原 FrameState）已抽到共享的 ClipPlayback.State（见 ClipPlayback.cs），
+    // 这里只留“actor.InstanceID → 状态”的字典，键与清理入口 ClearRuntimeCaches 不变。
+    private static readonly Dictionary<int, ClipPlayback.State> FrameByActor = new Dictionary<int, ClipPlayback.State>();
 
     // 按 actor 实例分别记左右朝向；禁止全局共享（NPC 会污染 PC 的 W/S）
     private static readonly Dictionary<int, bool> FlipByActor = new Dictionary<int, bool>();
@@ -38,16 +40,6 @@ internal class PccRenderPatch
     {
         FrameByActor.Clear();
         FlipByActor.Clear();
-    }
-
-
-    private sealed class FrameState
-    {
-        public float Timer;
-        public int Index;
-        public int LastAdvanceFrame = -1;
-        public SpriteData? LastClip;
-        public string? LastSig;
     }
 
     [HarmonyPrefix]
@@ -185,45 +177,15 @@ internal class PccRenderPatch
     {
         int actorKey = __instance.GetInstanceID();
         if (!FrameByActor.TryGetValue(actorKey, out var st) || st is null) {
-            st = new FrameState();
+            st = new ClipPlayback.State();
             FrameByActor[actorKey] = st;
         }
 
-        int fc = Time.frameCount;
-        if (st.LastAdvanceFrame != fc) {
-            st.LastAdvanceFrame = fc;
-            string? sig = AcsStateResolver.GetOneShotSignature(owner);
-            bool newAction = sig != null && sig != st.LastSig;
-            if (newAction) {
-                // 新一轮一次性动作（攻击/施法/受伤/复活…）：即使 clip 与上一帧是同一个
-                // SpriteData 对象（如 magic 回退共用 combat 图），也必须从头播——
-                // 否则继承战斗姿态的旧帧序号，一两帧就被判“播完”清掉（视觉上加速/闪完）。
-                st.LastSig = sig;
-                st.LastClip = data;
-                st.Timer = 0f;
-                st.Index = 0;
-            }
-            else if (!ReferenceEquals(st.LastClip, data)) {
-                // clip 引用变化（idle↔move/combat…）时从第 0 帧重播
-                st.LastClip = data;
-                st.Timer = 0f;
-                st.Index = 0;
-            }
-            else {
-                st.Timer += Core.delta;
-                if (st.Timer >= data.time && data.time > 0f) {
-                    st.Timer -= data.time;
-                    st.Index = AcsStateResolver.AdvanceClipIndex(owner, data.frame, st.Index);
-                }
-            }
-        }
-
-        // 防御：帧数变少时钳制（例如从 move 回 idle）
-        if (data.frame > 0 && st.Index >= data.frame) {
-            st.Index = 0;
-        }
+        // 同帧去重 + sig/clip 变化重播 + timer 累进 + 帧钳制与 NPC 端 AdvanceAndApply
+        // 共用同一套 ClipPlayback.State.StepFrame，避免两条路径各自维护导致行为漂移。
+        int index = st.StepFrame(owner, data);
         SpriteTimerRef(__instance) = st.Timer;
-        SpriteIndexRef(__instance) = st.Index;
+        SpriteIndexRef(__instance) = index;
     }
 
     /// <summary>

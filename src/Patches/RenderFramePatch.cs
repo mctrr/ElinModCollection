@@ -35,23 +35,14 @@ internal class RenderFramePatch
     private static bool _vanillaAnimTouched;
 
     /// <summary>
-    /// NPC 侧推进状态：同帧去重 + clip 引用变化时从第 0 帧重播。
-    /// 用独立副本而不直接依赖 actor.spriteTimer/spriteIndex：
-    /// 1) 换肤角色 vanillaTouched=true 时原版与 Postfix 同帧各推一次 → 双倍速；
-    ///    这里仅记录我们这一路的推进，配合 allowAdvance 避免叠加。
-    /// 2) 状态切换（combat→melee→magic…）若不重置帧序号，会从中途/末帧续播：
-    ///    一次性动画瞬间播完 → 看起来“攻击不触发”。
+    /// NPC 侧逐帧推进状态：同帧去重 + clip/一次性动作变化时从第 0 帧重播。
+    /// 逐帧推进状态机（原 NpcFrameState，含 LastFrame 同帧去重）已抽到共享的
+    /// <see cref="ClipPlayback.State"/>（见 ClipPlayback.cs），这里只留
+    /// “actor.InstanceID → 状态”的字典，键与清理入口 ClearRuntimeCaches 不变。
+    /// 仍用独立副本而不直接依赖 actor.spriteTimer/spriteIndex：换肤角色 vanillaTouched=true
+    /// 时原版与 Postfix 同帧各推一次会双倍速，配合 allowAdvance 避免叠加。
     /// </summary>
-    private sealed class NpcFrameState
-    {
-        public SpriteData? LastClip;
-        public string? LastSig;
-        public float Timer;
-        public int Index;
-        public int LastFrame;
-    }
-
-    private static readonly Dictionary<int, NpcFrameState> NpcFrames = new();
+    private static readonly Dictionary<int, ClipPlayback.State> NpcFrames = new();
 
     /// <summary>
     /// Transpiler：在原版“读取 data.frame”附近插入委托调用，
@@ -147,23 +138,17 @@ internal class RenderFramePatch
         // 一次性动画刚触发就被清掉（表现为 0.1s 闪完 / 不触发）。
         int nActorKey = actor.GetInstanceID();
         if (!NpcFrames.TryGetValue(nActorKey, out var nSt)) {
-            nSt = new NpcFrameState();
+            nSt = new ClipPlayback.State();
             NpcFrames[nActorKey] = nSt;
         }
 
         // 切换 clip（combat→hurt/magic/melee…）或“新一轮一次性动作”时把原版帧序号归零。
         // 只看 clip 引用不够：magic/melee 缺专属片回退共用 combat 图时对象不变，新动作会
         // 继承旧播放位置，Freeze 首帧即误判“末帧”掐断（攻击 2-3 帧 / 不触发）。
-        string? npcSig = AcsStateResolver.GetOneShotSignature(chara);
-        bool npcNewAction = npcSig != null && npcSig != nSt.LastSig;
-        if (npcNewAction || !ReferenceEquals(nSt.LastClip, data)) {
-            if (npcNewAction) {
-                nSt.LastSig = npcSig;
-            }
-
-            nSt.LastClip = data;
-            nSt.Index = 0;
-            nSt.Timer = 0f;
+        // 重播判定（sig 变 / clip 引用变，含 LastSig/LastClip 更新与内部 Timer/Index 清零）
+        // 已抽到共享的 ClipPlayback.State.RestartIfChanged；这里仅在命中重播时把原版
+        // actor.spriteIndex/spriteTimer 归零（只此一处重置 actor 状态，语义同旧实现）。
+        if (nSt.RestartIfChanged(chara, data)) {
             SpriteIndexRef(actor) = 0;
             SpriteTimerRef(actor) = 0f;
         }
@@ -403,47 +388,16 @@ internal class RenderFramePatch
     {
         int actorKey = actor.GetInstanceID();
         if (!NpcFrames.TryGetValue(actorKey, out var st)) {
-            st = new NpcFrameState();
+            st = new ClipPlayback.State();
             NpcFrames[actorKey] = st;
         }
 
-        int fc = Time.frameCount;
-        if (st.LastFrame != fc) {
-            st.LastFrame = fc;
-            string? sig = AcsStateResolver.GetOneShotSignature(chara);
-            bool newAction = sig != null && sig != st.LastSig;
-            if (newAction) {
-                // 新一轮一次性动作（攻击/施法/受伤…）：即使 clip 与上一帧是同一个
-                // SpriteData 对象（如 magic/melee 回退共用 combat 图），也必须从头播——
-                // 否则继承战斗姿态的旧帧序号，一两帧就被判“播完”清掉（视觉上加速/闪完）。
-                st.LastSig = sig;
-                st.LastClip = data;
-                st.Timer = 0f;
-                st.Index = 0;
-            }
-            else if (!ReferenceEquals(st.LastClip, data)) {
-                // clip 引用变化（idle↔move↔combat↔melee…）：从第 0 帧重播。
-                st.LastClip = data;
-                st.Timer = 0f;
-                st.Index = 0;
-            }
-            else {
-                st.Timer += Core.delta;
-                if (st.Timer >= data.time && data.time > 0f) {
-                    st.Timer -= data.time;
-                    st.Index = AcsStateResolver.AdvanceClipIndex(chara, data.frame, st.Index);
-                }
-            }
-        }
-
-        // 防御：帧数变少时钳制（例如 move 回 idle）
-        if (data.frame > 0 && st.Index >= data.frame) {
-            st.Index = 0;
-        }
-
+        // 同帧去重 + sig/clip 变化重播 + timer 累进 + 帧钳制全部在共享的
+        // ClipPlayback.State.StepFrame 内完成，与 PC 端 AdvanceFrame 是同一套口径。
+        int index = st.StepFrame(chara, data);
         SpriteTimerRef(actor) = st.Timer;
-        SpriteIndexRef(actor) = st.Index;
-        ApplyClipFrame(actor, data, st.Index);
+        SpriteIndexRef(actor) = index;
+        ApplyClipFrame(actor, data, index);
     }
 
     /// <summary>按 index 应用一帧：EnsureAcsSprites 校正后取 sprites[index] 并覆盖 sr。</summary>

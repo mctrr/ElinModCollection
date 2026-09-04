@@ -24,6 +24,14 @@ internal static class TextureSkinCatalog
     private static readonly Dictionary<string, string> LabelByPath =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// 扫描期顺带留底的目录清单：目录全路径 → 该目录全部 *.png 的全路径。
+    /// EnsureScanned/AddDir 本来就会对每个目录 GetFiles 一次，把结果留在这，让
+    /// EnsureSkin（CollectFilesForBase）与 SkinChangeWatcher.TrackTextureSkins 按
+    /// baseId 前缀过滤复用，避免对同一批目录反复枚举。与 _bases 同生命周期，Invalidate 一并清空。
+    /// </summary>
+    private static Dictionary<string, string[]>? _dirPngFiles;
+
     internal readonly struct Entry
     {
         public readonly string Id;
@@ -41,6 +49,7 @@ internal static class TextureSkinCatalog
     internal static void Invalidate()
     {
         _bases = null;
+        _dirPngFiles = null;
         LabelByPath.Clear();
     }
 
@@ -190,7 +199,7 @@ internal static class TextureSkinCatalog
         }
 
         try {
-            foreach (var file in Directory.GetFiles(dir, id + "*.png", SearchOption.TopDirectoryOnly)) {
+            foreach (var file in GetBasePngCandidates(dir, id)) {
                 string fileId = Path.GetFileNameWithoutExtension(file);
                 if (fileId.IsEmpty()) {
                     continue;
@@ -216,6 +225,48 @@ internal static class TextureSkinCatalog
         return subset;
     }
 
+    /// <summary>
+    /// 返回某 base 在同目录下的候选 png 全路径：文件清单以 baseId 开头（等价于对同一份目录
+    /// 枚举结果做 GetFiles(dir, id + "*.png")）。目录在扫描缓存里就直接从缓存过滤，不再碰磁盘；
+    /// 缓存未覆盖该目录时（一轮扫描后正常不会发生）按旧行为枚举一次 *.png 并回填缓存。
+    /// 供 CollectFilesForBase 与 SkinChangeWatcher.TrackTextureSkins 共用，避免重复枚举同一目录。
+    /// </summary>
+    internal static string[] GetBasePngCandidates(string dir, string id)
+    {
+        if (!dir.IsEmpty() && _dirPngFiles is not null
+            && _dirPngFiles.TryGetValue(dir, out var cached)) {
+            return FilterCandidatesByPrefix(cached, id);
+        }
+
+        // 目录未在缓存中：退化为现行为（全目录枚举一次），并把结果留底供后续复用。
+        string[] files = Directory.GetFiles(dir, "*.png", SearchOption.TopDirectoryOnly);
+        if (!dir.IsEmpty() && _dirPngFiles is not null) {
+            _dirPngFiles[dir] = files;
+        }
+
+        return FilterCandidatesByPrefix(files, id);
+    }
+
+    /// <summary>
+    /// 从一份“全部 *.png”清单里筛出文件名以 id 开头的项。缓存里只有 .png 结尾的文件，
+    /// 前缀比较用大小写不敏感，与 Windows 上 GetFiles(dir, id + "*.png") 的通配匹配口径一致。
+    /// </summary>
+    private static string[] FilterCandidatesByPrefix(string[] pngFiles, string id)
+    {
+        if (pngFiles.Length == 0) {
+            return pngFiles;
+        }
+
+        List<string>? hit = null;
+        foreach (string f in pngFiles) {
+            if (Path.GetFileName(f).StartsWith(id, StringComparison.OrdinalIgnoreCase)) {
+                (hit ??= new List<string>()).Add(f);
+            }
+        }
+
+        return hit is null ? Array.Empty<string>() : hit.ToArray();
+    }
+
     private static void EnsureScanned()
     {
         if (_bases is not null) {
@@ -223,6 +274,7 @@ internal static class TextureSkinCatalog
         }
 
         _bases = new Dictionary<string, Entry>(StringComparer.OrdinalIgnoreCase);
+        _dirPngFiles = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
         LabelByPath.Clear();
 
         try {
@@ -310,6 +362,17 @@ internal static class TextureSkinCatalog
         }
         catch (Exception) {
             return;
+        }
+
+        // 把这次枚举结果留底供后续按 base 过滤复用（保留“所有 *.png”而非只留过滤通过的，
+        // 与 CollectFilesForBase 的“先按名枚举、再按后缀名过滤”口径保持一致）。
+        if (_dirPngFiles is not null) {
+            string[] paths = new string[files.Length];
+            for (int i = 0; i < files.Length; i++) {
+                paths[i] = files[i].FullName;
+            }
+
+            _dirPngFiles[dir.FullName] = paths;
         }
 
         foreach (var file in files) {

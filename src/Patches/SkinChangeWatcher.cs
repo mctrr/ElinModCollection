@@ -154,7 +154,9 @@ internal static class SkinChangeWatcher
                         continue;
                     }
 
-                    foreach (var f in Directory.GetFiles(dir, entry.Id + "*.png", SearchOption.TopDirectoryOnly)) {
+                    // 复用 TextureSkinCatalog 的目录扫描缓存（同 CollectFilesForBase 的候选口径），
+                    // 不再对每个 base 重复 GetFiles。
+                    foreach (var f in TextureSkinCatalog.GetBasePngCandidates(dir, entry.Id)) {
                         TrackPng(f);
                     }
                 }
