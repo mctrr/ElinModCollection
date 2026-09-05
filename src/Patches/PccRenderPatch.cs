@@ -42,7 +42,19 @@ internal class PccRenderPatch
         FlipByActor.Clear();
     }
 
+    // ── temp 篡改的兼容性设计 ──────────────────────────────────────────────
+    // 为了跳过原版 OnRender 的武器 tile / 装备手持绘制，需要让原版方法体读到
+    // tempLeft/tempRight == -1（原版 switch 的 case -1 就是"不画"）。
+    // 但直接改 pcc.data.temp 会污染"同样 patch CharaActorPCC.OnRender"的其它 mod：
+    // 它们在 BCS 之后执行的 prefix / postfix 会看到被篡改的 -1（例如亚瑟动画模型
+    // MountedNativeRiderEquipmentPatch 读 temp 画骑乘装备 → 走错分支 NRE）。
+    // 因此把篡改窗口压到最小：prefix 用 Priority.Last 最后一个执行（其它 mod 的
+    // prefix 先跑、看到原始值），postfix 用 Priority.First 第一个恢复（其它 mod 的
+    // postfix 后跑、也看到原始值），中间只有原版方法体处于 -1 窗口。
+    // 另加 finalizer 兜底：原版 / 其它 patch 抛异常时 postfix 不执行，若没有兜底
+    // 恢复 temp 会永久残留 -1（该角色从此不再画武器）。
     [HarmonyPrefix]
+    [HarmonyPriority(Priority.Last)]
     [HarmonyPatch(typeof(CharaActorPCC), nameof(CharaActorPCC.OnRender))]
     internal static void OnPccRenderPrefix(CharaActorPCC __instance)
     {
@@ -59,15 +71,32 @@ internal class PccRenderPatch
         _tempsSaved = true;
     }
 
-    [HarmonyPostfix]
-    [HarmonyPatch(typeof(CharaActorPCC), nameof(CharaActorPCC.OnRender))]
-    internal static void OnPccRender(CharaActorPCC __instance, RenderParam p)
+    /// <summary>幂等恢复 temp 原值；正常 postfix 路径与异常 finalizer 兜底共用。</summary>
+    private static void RestoreTemps(CharaActorPCC __instance)
     {
-        if (_tempsSaved && __instance.pcc?.data != null) {
+        if (_tempsSaved && __instance?.pcc?.data != null) {
             __instance.pcc.data.tempLeft = _savedTempLeft;
             __instance.pcc.data.tempRight = _savedTempRight;
             _tempsSaved = false;
         }
+    }
+
+    [HarmonyFinalizer]
+    [HarmonyPatch(typeof(CharaActorPCC), nameof(CharaActorPCC.OnRender))]
+    internal static void OnPccRenderFinalizer(CharaActorPCC __instance)
+    {
+        // 原版或其它 patch 中途抛异常时 postfix 不会执行，finalizer 保证恢复，
+        // 防止 temp 残留 -1 导致该角色此后永远不画武器 / 其它 mod 读错值。
+        RestoreTemps(__instance);
+    }
+
+    [HarmonyPostfix]
+    [HarmonyPriority(Priority.First)]
+    [HarmonyPatch(typeof(CharaActorPCC), nameof(CharaActorPCC.OnRender))]
+    internal static void OnPccRender(CharaActorPCC __instance, RenderParam p)
+    {
+        // 最先恢复 temp：让同方法上其它 mod 的 postfix 看到原始值（见上方注释）。
+        RestoreTemps(__instance);
 
         if (!TryGetAcs(out var owner, out var data, __instance, p.snow)) {
             return;
