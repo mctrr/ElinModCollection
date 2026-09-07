@@ -499,7 +499,7 @@ internal class PccRenderPatch
     /// 避免盖住/干扰 _acs_combat 动态贴图。
     /// ACS 全身图叠在 PCC 脚底锚点上，原版 heldPos 会落在脚边。
     /// clip .ini 的 bcs_heldX/bcs_heldY 是 100 ppu 像素偏移，叠在原版 heldPos 上
-    /// （bcs_ 前缀 = BCS 扩展键，原版忽略；旧版裸键 heldX/heldY 仍兼容）。
+    /// （bcs_ 前缀 = BCS 扩展键，原版忽略）。
     /// </summary>
     [HarmonyPrefix]
     [HarmonyPatch(typeof(CharaRenderer), nameof(CharaRenderer.DrawHeld))]

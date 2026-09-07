@@ -11,7 +11,6 @@ namespace ACS.Patches;
 /// ACS clip .ini extras. Vanilla only reads frame/time/scale;
 /// bcs_heldX/bcs_heldY are BCS extension keys (bcs_ prefix = BCS-owned; vanilla ignores unknown keys)
 /// for eat (and any clip) held-item offset, in pixels at 100 ppu.
-/// Legacy bare heldX/heldY are still read for backward compatibility.
 /// </summary>
 internal static class AcsClipIni
 {
@@ -38,15 +37,8 @@ internal static class AcsClipIni
 
         HeldKnown.Add(key);
         var map = ReadMap(data.path + ".ini");
-        float x = 0f;
-        if (!TryParsePx(map, "bcs_heldX", out x)) {
-            TryParsePx(map, "heldX", out x); // legacy un-prefixed key
-        }
-
-        float y = 0f;
-        if (!TryParsePx(map, "bcs_heldY", out y)) {
-            TryParsePx(map, "heldY", out y); // legacy un-prefixed key
-        }
+        TryParsePx(map, "bcs_heldX", out float x);
+        TryParsePx(map, "bcs_heldY", out float y);
 
         if (x == 0f && y == 0f) {
             return false;
