@@ -183,14 +183,15 @@ internal class PcSkinPatch
     /// </summary>
     internal static void BindNpcCustomSkin(CharaRenderer renderer)
     {
-        if (renderer is null || renderer.pccData is not null) {
+        if (renderer is null || renderer.pccData is not null || HasRenderReplacerCondition(renderer.owner)) {
             return;
         }
 
-        // 注意：不能在这里用 IsVanillaAtlasRender 拦截——非 PCC 的 NPC 一律 pccData==null
-        // 且 replacer 常非 null，那样会把所有 NPC 换肤都当成“atlas 变身”跳过（曾踩过、
-        // 已回滚）。atlas 变身防护只在 TryApplyPcSkin（PC 侧）保留。
-
+        // 注意：不能在这里用 IsVanillaAtlasRender(renderer.replacer!=null && pccData==null)
+        // 拦截——非 PCC 的 NPC 一律 pccData==null，曾把所有 NPC 换肤都误判成“atlas 变身”
+        // 跳过（已回滚）。改用 HasRenderReplacerCondition：只有角色身上存在真正提供
+        // RendererReplacer 的条件（变形/boost 等，_CreateRenderer 会据此把 data/pccData
+        // 切成 replacer 形态）才跳过，天生非 PCC 的 NPC 没有此类条件，换肤不受影响。
         var owner = renderer.owner;
         if (owner is null || owner.mimicry != null || owner.c_idSpriteReplacer.IsEmpty()) {
             return;
@@ -229,6 +230,35 @@ internal class PcSkinPatch
     internal static void RecreateRenderer(Chara chara)
     {
         chara?._CreateRenderer();
+    }
+
+    /// <summary>
+    /// 原版渲染替换态：角色身上存在提供 RendererReplacer 的条件（变形/boost 等）。
+    /// 此时 _CreateRenderer 已把 renderer.data / pccData 全部切成 replacer 的形态
+    /// （如变猫 → cat_black 的 RenderData、pccData=null）。若此时再把 renderer.data
+    /// 覆盖回 sourceCard 的 renderData（人形角色 = pcc 类），后续 OnEnterScreen 里
+    /// data.CreateActor() 会造出 pccData==null 的 CharaActorPCC →
+    /// CharaActorPCC.OnSetOwner → PCC.Get(null) → pccCache.Add(null) 崩溃。
+    /// （变猫/变波球复现；变物品/变婴儿/解除变身均正常。）
+    /// 天生非 PCC 的 NPC 没有此类条件，换肤不受影响。
+    /// </summary>
+    internal static bool HasRenderReplacerCondition(Chara? owner)
+    {
+        if (owner is null || owner.conditions is null) {
+            return false;
+        }
+
+        foreach (Condition con in owner.conditions) {
+            try {
+                if (con is not null && con.GetRendererReplacer() is not null) {
+                    return true;
+                }
+            }
+            catch (Exception) {
+                // 单个条件异常不影响整体判断
+            }
+        }
+        return false;
     }
 
     /// <summary>
