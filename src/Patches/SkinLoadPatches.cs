@@ -398,6 +398,9 @@ internal class SkinListPatch
     /// 按当前 data.frame 直接重切，不经过 LoadAnimationIni。
     /// 文件名带 @N 时按 N 的 PPU 切帧（nightly scaleTex 语义）：图放大了 N/100 倍，
     /// 世界尺寸不变。无标注走原逻辑（PPU=100），渲染数学与旧版逐位相同。
+    /// clip 旁若有 .pref → LoadPref 并保留（scaleTex 已被 LoadPref postfix 剥掉，
+    /// 密度只认文件名 @N/100；shadow/x/y/z/pivot 等键交给 vanilla Chara.Pref 走皮肤级语义）；
+    /// 无 .pref → 维持 null（回落 replacer1，由 Chara.Pref postfix 再兜原皮链）。
     /// </summary>
     internal static void ForceReloadSprites(SpriteData data)
     {
@@ -408,12 +411,18 @@ internal class SkinListPatch
         try {
             int ppu = ResolveDensityPpu(data);
             data.sprites = null;
-            SourcePref? oldPref = data.pref;
+
+            // 皮肤级 .pref：文件在磁盘上就 LoadPref（首次），保留到 data.pref。
+            // 之后再切帧/被 vanilla 懒加载读到都是同一份（scaleTex 已剥）。
+            if (data.pref is null && File.Exists(data.path + ".pref")) {
+                data.LoadPref();
+            }
+
+            SourcePref? keep = data.pref;
             bool injected = false;
             if (ppu != 100) {
                 // nightly SpriteData.LoadSprites 以 pref.ScaleTex 决定 PPU：
-                // 临时注入密度让横条按 100*ScaleTex 切帧，切完立即还原。
-                // ACS 数据一律不保留 pref —— 防 x/y/pivot 等键被 vanilla 其它路径误读。
+                // 临时注入密度让横条按 100*ScaleTex 切帧，切完还原为保留的 pref。
                 data.pref = CreateDensityPref(ppu);
                 injected = true;
             }
@@ -423,7 +432,7 @@ internal class SkinListPatch
             }
             finally {
                 if (injected) {
-                    data.pref = oldPref;
+                    data.pref = keep;
                 }
             }
 
