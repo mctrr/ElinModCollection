@@ -14,8 +14,15 @@ internal static class AcsSpritePresenter
     // 100 ppu 下约 10 像素：PCC 站位相对地面的固定浮空补偿（与画幅无关）
     internal const float GroundYOffset = 0;
 
+    // 兜底 PPU：@N 文件名 / pref scaleTex 未生效时保持 100（1x，旧行为）
     private const float PixelsPerUnit = 100f;
     private const byte AlphaThreshold = 10;
+
+    /// <summary>帧 sprite 实际 PPU（@N 切帧后 = 作者标注密度）；异常回退 100。</summary>
+    private static float PpuOf(Sprite? source)
+        => source is not null && source.pixelsPerUnit > 0f
+            ? source.pixelsPerUnit
+            : PixelsPerUnit;
 
     // 源帧 sprite → bottom-pivot 副本
     private static readonly Dictionary<int, Sprite> BottomPivotCache = new Dictionary<int, Sprite>();
@@ -77,8 +84,9 @@ internal static class AcsSpritePresenter
         }
 
         // bottom-pivot 时 pivot 在 rect 底边；底边透明 → 视觉脚底高于 pivot，需再下沉
+        // 像素→世界按帧实际 PPU（@N 高清帧 PPU>100 时 pad 世界值不变）
         float scaleY = worldScaleY == 0f ? 1f : Mathf.Abs(worldScaleY);
-        y -= (padPx / PixelsPerUnit) * scaleY;
+        y -= (padPx / PpuOf(source)) * scaleY;
         return y;
     }
 
@@ -118,6 +126,7 @@ internal static class AcsSpritePresenter
 
         float halfLocal = 0f;
         float minPadPx = float.MaxValue;
+        float ppu = 0f;
         bool any = false;
         for (int i = 0; i < sprites.Length; i++) {
             Sprite? s = sprites[i];
@@ -126,6 +135,10 @@ internal static class AcsSpritePresenter
             }
 
             any = true;
+            if (ppu <= 0f) {
+                ppu = PpuOf(s); // 同一条 strip 所有帧同 PPU，取首帧即可
+            }
+
             float extY = s.bounds.extents.y;
             if (extY > halfLocal) {
                 halfLocal = extY;
@@ -146,8 +159,12 @@ internal static class AcsSpritePresenter
             minPadPx = 0f;
         }
 
+        if (ppu <= 0f) {
+            ppu = PixelsPerUnit;
+        }
+
         float halfWorldY = halfLocal * scaleY;
-        float padWorldY = (minPadPx / PixelsPerUnit) * scaleY;
+        float padWorldY = (minPadPx / ppu) * scaleY;
         float lift = halfWorldY - padWorldY;
         if (lift < 0f) {
             lift = 0f;
@@ -253,7 +270,7 @@ internal static class AcsSpritePresenter
             source.texture,
             source.textureRect,
             new Vector2(0.5f, 0f),
-            PixelsPerUnit,
+            PpuOf(source), // 与源帧同 PPU：@N 高清帧的副本保持相同世界尺寸
             0u,
             SpriteMeshType.FullRect);
 

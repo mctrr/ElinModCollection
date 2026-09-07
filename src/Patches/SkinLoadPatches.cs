@@ -396,6 +396,8 @@ internal class SkinListPatch
 
     /// <summary>
     /// 按当前 data.frame 直接重切，不经过 LoadAnimationIni。
+    /// 文件名带 @N 时按 N 的 PPU 切帧（nightly scaleTex 语义）：图放大了 N/100 倍，
+    /// 世界尺寸不变。无标注走原逻辑（PPU=100），渲染数学与旧版逐位相同。
     /// </summary>
     internal static void ForceReloadSprites(SpriteData data)
     {
@@ -404,13 +406,64 @@ internal class SkinListPatch
         }
 
         try {
+            int ppu = ResolveDensityPpu(data);
             data.sprites = null;
-            data.LoadSprites();
+            SourcePref? oldPref = data.pref;
+            bool injected = false;
+            if (ppu != 100) {
+                // nightly SpriteData.LoadSprites 以 pref.ScaleTex 决定 PPU：
+                // 临时注入密度让横条按 100*ScaleTex 切帧，切完立即还原。
+                // ACS 数据一律不保留 pref —— 防 x/y/pivot 等键被 vanilla 其它路径误读。
+                data.pref = CreateDensityPref(ppu);
+                injected = true;
+            }
+
+            try {
+                data.LoadSprites();
+            }
+            finally {
+                if (injected) {
+                    data.pref = oldPref;
+                }
+            }
+
             // 功能3：ACS 纹理用 Point，避免 Bilinear 软边（不改 scale/位置）
             ApplyPointFilter(data);
         }
         catch (Exception) {
             // path 未就绪等：留给显示路径再试
+        }
+    }
+
+    /// <summary>文件名 @N（clip.ScaleTex）→ 渲染 PPU；无标注恒为 100。</summary>
+    internal static int ResolveDensityPpu(SpriteData data)
+    {
+        try {
+            var clip = ResolveClipFromPath(data);
+            if (clip is { ScaleTex: > 0 } && clip.ScaleTex != 100) {
+                return clip.ScaleTex;
+            }
+        }
+        catch (Exception) {
+        }
+
+        return 100;
+    }
+
+    /// <summary>只写 ints[25]（scaleTex 键）的 pref。vanilla：ScaleTex=ints[25]*0.01f，LoadSprites PPU=100*ScaleTex=ints[25]。</summary>
+    private static SourcePref? CreateDensityPref(int ppu)
+    {
+        if (ppu <= 0) {
+            return null;
+        }
+
+        try {
+            var pref = new SourcePref { ints = new int[26] }; // SourcePref.TotalPrefInts（nightly 版）
+            pref.ints[25] = ppu;
+            return pref;
+        }
+        catch (Exception) {
+            return null;
         }
     }
 

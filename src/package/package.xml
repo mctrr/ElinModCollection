@@ -44,11 +44,12 @@ PC 朝反方向释放敌对法术时，会按目标的屏幕水平方向转身�
 
 [h2]命名格式[/h2]
 
-[code]_acs_{前缀}.{状态}#{帧间隔ms}_{起始帧}-{结束帧}[/code]
+[code]_acs_{前缀}.{状态}#{帧间隔ms}_{起始帧}-{结束帧}[@{scaleTex}][/code]
 
 [list]
 [*] [b]前缀[/b]（可选）：任意皮肤名（手动） / snow（雪地） / married（已婚）
 [*] [b]状态[/b]：revive / emote / combat / move / greet / greet1-4 / wet / drunk / confused / blind / idle（idle 无需写出）
+[*] [b]scaleTex[/b]（可选，夜间版 23.343.1+）：贴图密度标注，值 = 期望渲染 PPU。贴图放大了几倍就写几倍：[b]@400[/b] = 图放大 4 倍但世界尺寸与 1x 完全相同（无需重调 y/heightFix 等）。缺省 100（1x，旧行为）
 [/list]
 
 [h3]举个例子[/h3]

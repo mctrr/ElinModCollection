@@ -4,25 +4,31 @@ using System.Text.RegularExpressions;
 namespace ACS.API;
 
 /// <summary>
-/// 解析 ACS 文件名格式：_acs_{name}#{interval}_{begin}-{end}
+/// 解析 ACS 文件名格式：_acs_{name}#{interval}_{begin}-{end}[@{scaleTex}]
 /// 例：_acs_idle#66_0-3 → name=idle, 帧间隔 66ms, 帧 0..3
+///      _acs_idle#41_0-31@400 → 同上，但渲染 PPU=400（图放大 4 倍，世界尺寸不变）
 ///
+/// @N 是「贴图密度」标注：贴图放大了几倍就写几倍 PPU（100=1x，400=4x），
+/// 让高分辨率图在游戏里占据与 1x 完全相同的世界尺寸（对齐 nightly 的 scaleTex 语义）。
 /// 这是「文件名 → 结构化数据」的工具类；真正选哪一段播放见 <see cref="AcsController"/>。
 /// </summary>
-public class AcsClip(string name, int interval, int begin, int end)
+public class AcsClip(string name, int interval, int begin, int end, int scaleTex = 100)
 {
     /// <summary>
     /// Compiled 正则：只编译一次，多次 Match 更快。
     /// (?&lt;name&gt;...) 是命名捕获组，后面用 Groups["name"] 取。
     /// </summary>
     private static readonly Regex _acsFormat = new(
-        @"^_acs_(?<name>[^#]+)#(?<interval>\d+)_(?<begin>\d+)-(?<end>\d+)$",
+        @"^_acs_(?<name>[^#]+)#(?<interval>\d+)_(?<begin>\d+)-(?<end>\d+)(?:@(?<scaleTex>\d+))?$",
         RegexOptions.Compiled);
 
     public readonly int Begin = begin;
     public readonly int End = end;
     public readonly int Interval = interval;
     public readonly string Name = name;
+
+    /// <summary>渲染 PPU（像素/世界单位）；文件名 @N 标注，缺省 100（=1x）。</summary>
+    public readonly int ScaleTex = scaleTex > 0 ? scaleTex : 100;
 
     /// <summary>包含两端的帧数，例如 0-3 → 4 帧。</summary>
     public int Length => End - Begin + 1;
@@ -48,7 +54,15 @@ public class AcsClip(string name, int interval, int begin, int end)
             end = begin;
         }
 
-        return new(match.Groups["name"].Value, interval, begin, end);
+        int scaleTex = 100;
+        var scaleGroup = match.Groups["scaleTex"];
+        if (scaleGroup.Success
+            && int.TryParse(scaleGroup.Value, out var parsed)
+            && parsed > 0) {
+            scaleTex = parsed;
+        }
+
+        return new(match.Groups["name"].Value, interval, begin, end, scaleTex);
     }
 }
 
