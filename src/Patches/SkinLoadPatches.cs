@@ -409,32 +409,17 @@ internal class SkinListPatch
         }
 
         try {
-            int ppu = ResolveDensityPpu(data);
             data.sprites = null;
 
             // 皮肤级 .pref：文件在磁盘上就 LoadPref（首次），保留到 data.pref。
-            // 之后再切帧/被 vanilla 懒加载读到都是同一份（scaleTex 已剥）。
+            // 之后再切帧/被 vanilla 懒加载读到都是同一份（scaleTex 已被 LoadPref postfix 剥掉）。
             if (data.pref is null && File.Exists(data.path + ".pref")) {
                 data.LoadPref();
             }
 
-            SourcePref? keep = data.pref;
-            bool injected = false;
-            if (ppu != 100) {
-                // nightly SpriteData.LoadSprites 以 pref.ScaleTex 决定 PPU：
-                // 临时注入密度让横条按 100*ScaleTex 切帧，切完还原为保留的 pref。
-                data.pref = CreateDensityPref(ppu);
-                injected = true;
-            }
-
-            try {
-                data.LoadSprites();
-            }
-            finally {
-                if (injected) {
-                    data.pref = keep;
-                }
-            }
+            // @N 密度注入统一在 SpriteData.LoadSprites 前后缀做（vanilla 任意入口都覆盖），
+            // 这里只负责按文件名把帧切对：LoadSprites 内部会按需以 @N PPU 重建切片。
+            data.LoadSprites();
 
             // 功能3：ACS 纹理用 Point，避免 Bilinear 软边（不改 scale/位置）
             ApplyPointFilter(data);
@@ -460,7 +445,7 @@ internal class SkinListPatch
     }
 
     /// <summary>只写 ints[25]（scaleTex 键）的 pref。vanilla：ScaleTex=ints[25]*0.01f，LoadSprites PPU=100*ScaleTex=ints[25]。</summary>
-    private static SourcePref? CreateDensityPref(int ppu)
+    internal static SourcePref? CreateDensityPref(int ppu)
     {
         if (ppu <= 0) {
             return null;
@@ -533,7 +518,20 @@ internal class SkinListPatch
             bool looksLikeUncutStrip = data.frame == 1
                 && sprites[0].texture is not null
                 && sprites[0].rect.width > sprites[0].texture.height * 1.5f;
-            if (!looksLikeUncutStrip) {
+
+            // PPU 不符（vanilla Load() 等入口按 100 重切过 @N 图，会变巨大）→ 强制重切
+            bool ppuOk = true;
+            if (!looksLikeUncutStrip
+                && data.path.IndexOf("_acs_", StringComparison.Ordinal) >= 0
+                && sprites[0].pixelsPerUnit > 0f) {
+                int expected = ResolveDensityPpu(data);
+                if (expected > 0
+                    && !Mathf.Approximately(sprites[0].pixelsPerUnit, expected)) {
+                    ppuOk = false;
+                }
+            }
+
+            if (!looksLikeUncutStrip && ppuOk) {
                 if (data.tex is not null && data.tex.filterMode != FilterMode.Point) {
                     ApplyPointFilter(data);
                 }
@@ -629,10 +627,17 @@ internal class SkinListPatch
 /// <summary>
 /// Vanilla LoadSprites NREs when IO.LoadPNG returns null or frame &lt; 1.
 /// Keep the picker / GetSprite path from blowing up the whole list.
+/// Also the single funnel for @N density: vanilla Load()/Validate->Load/
+/// LoadPrefAndFixDensity all call LoadSprites, and each one would otherwise
+/// recut a 4x sheet at PPU=100 (giant). Inject a scaleTex-only pref for the
+/// duration of the call so every entry point slices at the filename @N PPU.
 /// </summary>
 [HarmonyPatch(typeof(SpriteData), nameof(SpriteData.LoadSprites))]
 internal static class SpriteDataLoadSpritesPatch
 {
+    private static readonly Dictionary<SpriteData, SourcePref?> SavedPrefs = new();
+    private static readonly HashSet<string> LoggedDensity = new();
+
     [HarmonyPrefix]
     internal static bool Prefix(SpriteData __instance)
     {
@@ -657,12 +662,21 @@ internal static class SpriteDataLoadSpritesPatch
             return false;
         }
 
+        InjectDensity(__instance);
         return true;
+    }
+
+    [HarmonyPostfix]
+    internal static void Postfix(SpriteData __instance)
+    {
+        RestorePref(__instance);
     }
 
     [HarmonyFinalizer]
     internal static Exception? Finalizer(SpriteData __instance, Exception? __exception)
     {
+        RestorePref(__instance);
+
         if (__exception is null) {
             return null;
         }
@@ -674,6 +688,51 @@ internal static class SpriteDataLoadSpritesPatch
         }
 
         return null;
+    }
+
+    private static void InjectDensity(SpriteData data)
+    {
+        try {
+            if (data.path.IndexOf("_acs_", StringComparison.Ordinal) < 0) {
+                return;
+            }
+
+            int ppu = SkinListPatch.ResolveDensityPpu(data);
+            if (ppu <= 0 || ppu == 100) {
+                return;
+            }
+
+            lock (SavedPrefs) {
+                SavedPrefs[data] = data.pref;
+            }
+
+            data.pref = SkinListPatch.CreateDensityPref(ppu);
+
+            if (LoggedDensity.Add(data.path)) {
+                AcsMod.Log($"density: slicing '{data.path}' at PPU={ppu} (filename @{ppu})");
+            }
+        }
+        catch (Exception) {
+            // 注入失败就按原逻辑切（PPU=100），显示端 EnsureAcsSprites 会再校正
+        }
+    }
+
+    private static void RestorePref(SpriteData data)
+    {
+        try {
+            if (data is null) {
+                return;
+            }
+
+            lock (SavedPrefs) {
+                if (SavedPrefs.TryGetValue(data, out var old)) {
+                    data.pref = old;
+                    SavedPrefs.Remove(data);
+                }
+            }
+        }
+        catch (Exception) {
+        }
     }
 
     private static void EnsureSprites(SpriteData data)
