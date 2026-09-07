@@ -180,7 +180,7 @@ public static class AcsController
     /// 1c) melee：近战窗口（低于 magic、高于 combat）先取 _acs_{prefix}.melee，
     ///    缺片时按 combat 选片回退
     /// 1d) range：远程窗口先取 _acs_{prefix}.range，缺片回退 combat
-    /// 1e) cmove：战斗中移动先取 _acs_{prefix}.cmove，缺片回退 combat
+    /// 1e) cmove：战斗中移动先取 _acs_{prefix}.cmove，缺片依次回退 move → combat
     /// 2) 其它状态：_acs_{prefix}.{state}
     /// 3) 仅当 state==idle 时，才允许旧式通用片 _acs_{prefix}
     /// 4) 再找无前缀 _acs_{state}（acs_override 前缀不走这一步，避免缺 move 时播原皮行走）
@@ -245,6 +245,18 @@ public static class AcsController
                 return baseCmove;
             }
 
+            // 缺 cmove 片：优先用 move 替代（战斗中移动仍是移动，步态比静止 combat 合理）。
+            // 与 cmove 同规则：先试前缀专属片，再试无前缀通用片。
+            if (prefix != null
+                && TryGetPrefixed(suffixes, prefix, "move", out var prefixedMove)) {
+                return prefixedMove;
+            }
+
+            if (!lockToPrefix && suffixes.TryGetValue(KeyMove, out var baseMove)) {
+                return baseMove;
+            }
+
+            // move 也没有 → 落 combat（持械姿态兜底，保证战斗中不空片）
             state = "combat";
         }
 
