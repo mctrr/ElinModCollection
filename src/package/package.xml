@@ -170,6 +170,37 @@ _acs_combat
 [*] 控制台：ACS.ListSkins / ACS.SetSkin / ACS.ClearSkin / ACS.ReloadAcs / ACS.Emote
 [/list]
 
+[h2]手持物偏移（bcs_heldX / bcs_heldY，可选）[/h2]
+
+每条动画条（clip）的 .png 旁都有一份同名 .ini（原版格式）。BCS 加载时会把原版三键写进去：
+
+[code]
+frame=39
+time=0.041
+scale=100
+[/code]
+
+在此基础上可以手加两行 [b]BCS 扩展键[/b]，调整该 clip 播放期间原版手持物（held）的绘制位置。典型用途：把吃食物时落在脚边的食物贴片抬到嘴边：
+
+[code]
+frame=39
+time=0.041
+scale=100
+bcs_heldX=0
+bcs_heldY=-40
+[/code]
+
+[list]
+[*] 键名带 [b]bcs_[/b] 前缀 = BCS 私有扩展键；原版只读 frame/time/scale，多余键原样忽略，不影响游戏本身
+[*] 单位：100 ppu 像素，BCS 自动换算成世界单位（贴图按 @N 放大也不影响本数值的换算）
+[*] [b]bcs_heldX[/b]：水平偏移（正值朝角色右侧）；角色朝左（flipX）时自动取反
+[*] [b]bcs_heldY[/b]：把手持物沿画面上下移动。负值把食物从脚边往嘴的方向抬（从 [b]-40[/b] 起步微调）
+[*] 只作用于[b]当前正在播放的 clip[/b]：每个动作读各自的 ini，只改 eat 不会影响 idle / combat 等
+[*] 没有 _acs_eat 动画条的角色，吃食物时播放的是回落条，此时改 eat 的 ini 不会生效
+[*] BCS 重写 ini 时只动 frame/time/scale，你手加的键不会被覆盖
+[*] 注释必须[b]单独成行[/b]（行首 [b];[/b] 或 [b]#[/b]），不能写在键值同一行
+[/list]
+
 [h2]原版说明[/h2]
 
 基于 [url=https://github.com/gottyduke/Elin.Plugins/tree/master/AnimatedCustomSprites]Animated Custom Sprites[/url] 修改，遵循 MIT 协议。
