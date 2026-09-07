@@ -101,6 +101,7 @@ public static class AcsController
     private const string KeyMagic = "_acs_magic";
     private const string KeyMelee = "_acs_melee";
     private const string KeyRanged = "_acs_range";
+    private const string KeyAtk = "_acs_atk";
     private const string KeyCmove = "_acs_cmove";
     private const string KeyHurt = "_acs_hurt";
     private const string KeyRevive = "_acs_revive";
@@ -194,7 +195,7 @@ public static class AcsController
         // snow/married 是状态修饰；acs_override 是整套换肤，缺片只能回当前前缀 idle
         bool lockToPrefix = prefix != null && prefix != "snow" && prefix != "married";
 
-        // magic 优先于 combat；缺专属片时按 combat 选片回退（含主手武器键）
+        // magic 低于 revive/emote/hurt，高于 melee/combat；缺专属片时回退通用 atk，再按 combat 选片回退
         if (state == "magic") {
             if (prefix != null
                 && TryGetPrefixed(suffixes, prefix, "magic", out var prefixedMagic)) {
@@ -205,10 +206,15 @@ public static class AcsController
                 return baseMagic;
             }
 
+            // 缺 magic 专属片：先试通用攻击片 atk（魔法也是攻击），再落 combat
+            if (TryGetAtk(suffixes, prefix, lockToPrefix, out var magicAtk)) {
+                return magicAtk;
+            }
+
             state = "combat";
         }
 
-        // melee 低于 magic、高于 combat；缺专属片时按 combat 选片回退
+        // melee 低于 magic、高于 combat；缺专属片时回退通用 atk，再按 combat 选片回退
         if (state == "melee") {
             if (prefix != null
                 && TryGetPrefixed(suffixes, prefix, "melee", out var prefixedMelee)) {
@@ -217,6 +223,11 @@ public static class AcsController
 
             if (!lockToPrefix && suffixes.TryGetValue(KeyMelee, out var baseMelee)) {
                 return baseMelee;
+            }
+
+            // 缺 melee 专属片：先试通用攻击片 atk（挥砍也是攻击），再落 combat
+            if (TryGetAtk(suffixes, prefix, lockToPrefix, out var meleeAtk)) {
+                return meleeAtk;
             }
 
             state = "combat";
@@ -397,6 +408,28 @@ public static class AcsController
 
         // 自定义 override：_acs_{prefix}.combat.{weapon}
         return suffixes.TryGetValue("_acs_" + prefix + ".combat." + weaponKey, out data);
+    }
+
+    /// <summary>
+    /// 通用攻击片 atk：magic/melee 缺专属片时的共享回退。
+    /// 同其余状态：先试前缀专属片（snow/married/自定义 override），再试无前缀通用片。
+    /// </summary>
+    private static bool TryGetAtk(
+        Dictionary<string, SpriteData> suffixes,
+        string? prefix,
+        bool lockToPrefix,
+        out SpriteData? data)
+    {
+        if (prefix != null && TryGetPrefixed(suffixes, prefix, "atk", out data)) {
+            return true;
+        }
+
+        if (!lockToPrefix && suffixes.TryGetValue(KeyAtk, out data)) {
+            return true;
+        }
+
+        data = null;
+        return false;
     }
 
     private static string CombatWeaponKey(string weaponKey)
