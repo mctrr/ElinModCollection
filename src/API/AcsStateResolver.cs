@@ -1268,14 +1268,18 @@ public static class AcsStateResolver
     // ==================== 14. PC 移动判定 ====================
 
     /// <summary>
-    /// NPC 移动粘滞窗口（秒）。快队友跟队时是“冲一小段→停→再冲”的橡皮筋节拍，
-    /// isMoving 在每次短停时闪 false，切 idle 再切回 move 会从第 0 帧重播，
-    /// 短冲每次只见开头 1-2 帧（表现为走走停停/卡顿）。这里给 NPC 端补上
-    /// PC 端已有的同类粘滞：isMoving 刚变 false 的 <see cref="NpcMoveHysteresis"/>
-    /// 秒内仍按“移动中”处理，短停被平滑掉；真正停稳（超过窗口）才落 idle。
-    /// 纯视觉：不改位移/AI/速度，短停期间播 move 不影响任何游戏性判定。
+    /// 默认粘滞窗口（秒）。
+    public const float DefaultNpcMoveHysteresis = 0.1f;
+
+    /// <summary>
+    /// NPC 移动粘滞窗口（秒，运行时可用控制台命令 <c>ACS.MoveHysteresis &lt;sec&gt;</c> 调整）。
+    /// 快队友跟队时是“冲一小段→停→再冲”的橡皮筋节拍，isMoving 在每次短停时闪 false，
+    /// 切 idle 再切回 move 会从第 0 帧重播，短冲每次只见开头 1-2 帧（表现为走走停停/卡顿）。
+    /// 这里给 NPC 端补上 PC 端已有的同类粘滞：isMoving 刚变 false 的
+    /// <see cref="NpcMoveHysteresis"/> 秒内仍按“移动中”处理，短停被平滑掉；
+    /// 真正停稳（超过窗口）才落 idle。纯视觉：不改位移/AI/速度，不影响任何游戏性判定。
     /// </summary>
-    private const float NpcMoveHysteresis = 0.3f;
+    public static float NpcMoveHysteresis = DefaultNpcMoveHysteresis;
 
     /// <summary>NPC 最近一次 isMoving 为 true 的时刻（realtimeSinceStartup，按 uid）。</summary>
     private static readonly Dictionary<int, float> LastNpcMoveTime = new();
