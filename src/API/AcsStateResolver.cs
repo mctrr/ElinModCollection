@@ -1268,10 +1268,10 @@ public static class AcsStateResolver
     // ==================== 14. PC 移动判定 ====================
 
     /// <summary>
-    /// 默认粘滞窗口（秒）。0.2 为实测甜点：直线跟队平滑；
+    /// 默认粘滞窗口（秒）。0.16 为实测甜点：直线跟队平滑且停步残留最短；
     /// 更大窗口会在真停时“原地空走”（窗口内动画继续播），更小则回退短停抖动。
     /// </summary>
-    public const float DefaultNpcMoveHysteresis = 0.2f;
+    public const float DefaultNpcMoveHysteresis = 0.16f;
 
     /// <summary>
     /// NPC 移动粘滞窗口（秒，运行时可用控制台命令 <c>ACS.MoveHysteresis &lt;sec&gt;</c> 调整）。

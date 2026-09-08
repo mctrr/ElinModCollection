@@ -15,7 +15,7 @@ internal static class TuningCommands
     /// 查询 / 设置 NPC 移动粘滞窗口（秒）。
     /// 用法：ACS.MoveHysteresis            → 查询当前值
     ///      ACS.MoveHysteresis 0.25       → 设为 0.25s
-    ///      ACS.MoveHysteresis 0          → 恢复默认（0.2s）
+    ///      ACS.MoveHysteresis 0          → 恢复默认（0.16s）
     /// 含义：NPC isMoving 刚变 false 后，窗口内仍按“移动中”处理（move 动画继续
     /// 正常播放），平滑跟队“冲一小段→停→再冲”的节拍，避免短停就切 idle 导致
     /// move 从第 0 帧反复重播。窗口越大 → 停稳后原地“空走”越多；越小 → 越接近
