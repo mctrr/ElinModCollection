@@ -35,13 +35,29 @@ internal static class FullPortraitPatch
     [HarmonyPrefix]
     [HarmonyPatch(typeof(Portrait), nameof(Portrait.SetPortrait),
         new[] { typeof(string), typeof(Color), typeof(bool) })]
-    internal static void SetPortraitPrefix(Portrait __instance)
+    internal static void SetPortraitPrefix(Portrait __instance, string id)
     {
         try {
+            // 只在对话面板（DialogDrama）里启用全身立绘：角色面板 / 队伍列表 /
+            // 造人界面等也在用 Portrait，无差别开会把它们全变成大立绘。
+            if (!InDialogContext(__instance)) {
+                Image? old = __instance.imageFull;
+                if (old is not null && old.gameObject.name == GoName && old.gameObject.activeSelf) {
+                    old.gameObject.SetActive(false);
+                }
+
+                return;
+            }
+
             __instance.enableFull = true;
+            bool created = false;
             if (__instance.imageFull == null) {
                 __instance.imageFull = CreateImage(__instance);
+                created = true;
             }
+
+            AcsMod.Log($"[FullPortrait] SetPortrait id={id}"
+                + (created ? " (imageFull 自建)" : " (沿用 prefab imageFull)"));
         }
         catch (Exception ex) {
             AcsMod.Warn("[FullPortrait] prefix failed: " + ex.Message);
@@ -51,7 +67,7 @@ internal static class FullPortraitPatch
     [HarmonyPostfix]
     [HarmonyPatch(typeof(Portrait), nameof(Portrait.SetPortrait),
         new[] { typeof(string), typeof(Color), typeof(bool) })]
-    internal static void SetPortraitPostfix(Portrait __instance)
+    internal static void SetPortraitPostfix(Portrait __instance, string id)
     {
         try {
             Image? img = __instance.imageFull;
@@ -60,6 +76,7 @@ internal static class FullPortraitPatch
             }
 
             Sprite? sp = img.sprite;
+            AcsMod.Log("[FullPortrait] " + id + "-full: " + (sp is null ? "未找到（仍用小头像）" : $"命中 {sp.rect.width}x{sp.rect.height}"));
             bool ours = img.gameObject.name == GoName;
             if (sp is null) {
                 // 没有 -full 图：原版会让 imageFull 失活；自建的也一并关掉，避免残留空框
@@ -82,6 +99,30 @@ internal static class FullPortraitPatch
         catch (Exception ex) {
             AcsMod.Warn("[FullPortrait] postfix failed: " + ex.Message);
         }
+    }
+
+    /// <summary>
+    /// 该头像是否属于对话面板：向上找 DialogDrama 组件，或祖先名含 drama/dialog。
+    /// 组件判定为主（准确），名称判定兜底（DialogDrama 未必是 MonoBehaviour 祖先）。
+    /// </summary>
+    private static bool InDialogContext(Portrait portrait)
+    {
+        Transform? t = portrait.transform;
+        while (t is not null) {
+            if (t.GetComponent<DialogDrama>() is not null) {
+                return true;
+            }
+
+            string n = t.name ?? "";
+            if (n.IndexOf("drama", StringComparison.OrdinalIgnoreCase) >= 0
+                || n.IndexOf("dialog", StringComparison.OrdinalIgnoreCase) >= 0) {
+                return true;
+            }
+
+            t = t.parent;
+        }
+
+        return false;
     }
 
     /// <summary>
