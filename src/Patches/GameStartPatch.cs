@@ -44,5 +44,6 @@ internal class GameStartPatch
     {
         PcSkinBinder.TickRetry();
         SkinChangeWatcher.Tick(Time.frameCount);
+        PortraitAnimator.Tick();
     }
 }

@@ -26,11 +26,33 @@ internal static class FullPortraitPatch
 {
     private const string GoName = "BCS_FullPortrait";
 
-    /// <summary>立绘高 = 屏幕高 × 该比例（左下贴底竖立，对话框压在其上）。</summary>
-    private const float HeightRatio = 0.85f;
+    /// <summary>
+    /// 总开关（控制台 <c>ACS.FullPortrait on|off</c>）。关掉后不改任何原版行为，
+    /// 用于验证“原版本身是否已能把 -full 立绘显示出来”。
+    /// </summary>
+    internal static bool Enabled = true;
 
-    /// <summary>距屏幕左边距（像素）。</summary>
-    private const float LeftMargin = 8f;
+    // 布局参数（运行时可用控制台 ACS.PortraitLayout 调整，见 TuningCommands）
+
+    /// <summary>立绘高 = 屏幕高 × 该比例。</summary>
+    internal static float HeightRatio = 0.85f;
+
+    /// <summary>水平偏移（像素）：锚在左时 = 距左边距；锚在右时 = 距右边距。</summary>
+    internal static float OffsetX = 8f;
+
+    /// <summary>垂直偏移（像素）：距底边（负 = 沉到屏幕外，正 = 抬起）。</summary>
+    internal static float OffsetY = 0f;
+
+    /// <summary>true = 锚在父级右下角（右上角方向），false = 锚在左下角（默认）。</summary>
+    internal static bool AnchorRight;
+
+    internal static void ResetLayout()
+    {
+        HeightRatio = 0.85f;
+        OffsetX = 8f;
+        OffsetY = 0f;
+        AnchorRight = false;
+    }
 
     [HarmonyPrefix]
     [HarmonyPatch(typeof(Portrait), nameof(Portrait.SetPortrait),
@@ -38,6 +60,16 @@ internal static class FullPortraitPatch
     internal static void SetPortraitPrefix(Portrait __instance, string id)
     {
         try {
+            if (!Enabled) {
+                // 关掉：完全不改原版行为（已自建的立绘也隐藏）
+                Image? off = __instance.imageFull;
+                if (off is not null && off.gameObject.name == GoName && off.gameObject.activeSelf) {
+                    off.gameObject.SetActive(false);
+                }
+
+                return;
+            }
+
             // 只在对话面板（DialogDrama）里启用全身立绘：角色面板 / 队伍列表 /
             // 造人界面等也在用 Portrait，无差别开会把它们全变成大立绘。
             if (!InDialogContext(__instance)) {
@@ -75,6 +107,9 @@ internal static class FullPortraitPatch
                 return;
             }
 
+            // 动态立绘：若是横条动画，切成帧并把当前 sprite 换成首帧（尺寸按单帧算）
+            PortraitAnimator.Register(img, id);
+
             Sprite? sp = img.sprite;
             AcsMod.Log("[FullPortrait] " + id + "-full: " + (sp is null ? "未找到（仍用小头像）" : $"命中 {sp.rect.width}x{sp.rect.height}"));
             bool ours = img.gameObject.name == GoName;
@@ -87,14 +122,24 @@ internal static class FullPortraitPatch
                 return;
             }
 
+            // 布局：锚点取父级左下或右下角（父 = Canvas 直接子物体，即对话面板根，
+            // 通常铺满屏幕 → 等价于屏幕左下/右下角），pivot 与锚点同角，
+            // 偏移 (OffsetX, OffsetY) 按像素，高度 = 屏高 × HeightRatio，宽按 sprite 比例。
             RectTransform rt = img.rectTransform;
             float h = Screen.height * HeightRatio;
             float w = h * (sp.rect.width / Mathf.Max(1f, sp.rect.height));
-            rt.anchorMin = new Vector2(0f, 0f);
-            rt.anchorMax = new Vector2(0f, 0f);
-            rt.pivot = new Vector2(0f, 0f);
-            rt.anchoredPosition = new Vector2(LeftMargin, 0f);
+            float ax = AnchorRight ? 1f : 0f;
+            rt.anchorMin = new Vector2(ax, 0f);
+            rt.anchorMax = new Vector2(ax, 0f);
+            rt.pivot = new Vector2(ax, 0f);
+            rt.anchoredPosition = new Vector2(AnchorRight ? -OffsetX : OffsetX, OffsetY);
             rt.sizeDelta = new Vector2(w, h);
+
+            // 原版在显示全身立绘时会把小头像框整个隐藏（SetActive(!spriteFull)），
+            // 对话框左上会空一块。这里重新激活小头像框，小头像 + 全身立绘共存。
+            if (!__instance.gameObject.activeSelf) {
+                __instance.gameObject.SetActive(true);
+            }
         }
         catch (Exception ex) {
             AcsMod.Warn("[FullPortrait] postfix failed: " + ex.Message);

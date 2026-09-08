@@ -78,4 +78,99 @@ internal static class TuningCommands
 
         return "Invalid argument '" + arg + "'. Usage: ACS.AutoReload on|off";
     }
+
+    /// <summary>
+    /// 查询 / 开关对话全身立绘兜底（FullPortraitPatch）。
+    /// 用法：ACS.FullPortrait        → 查询状态
+    ///      ACS.FullPortrait off   → 关闭补丁（完全恢复原版行为，用来验证原版自己能不能显示）
+    ///      ACS.FullPortrait on    → 打开（默认）
+    /// 关闭后立绘仍出现 ⇒ 原版本来就支持，补丁只是补摆位/保留小头像。
+    /// </summary>
+    [ConsoleCommand]
+    public static string FullPortrait(string arg = "")
+    {
+        string status = "Full-body portrait fallback = " + (FullPortraitPatch.Enabled ? "ON" : "OFF")
+            + " (default ON; off = vanilla behaviour). Usage: ACS.FullPortrait on|off";
+
+        if (arg.IsEmpty()) {
+            return status;
+        }
+
+        string a = arg.Trim().ToLowerInvariant();
+        if (a is "on" or "1" or "true") {
+            FullPortraitPatch.Enabled = true;
+            return "Full-body portrait fallback enabled (re-enter dialogue to see it).";
+        }
+
+        if (a is "off" or "0" or "false") {
+            FullPortraitPatch.Enabled = false;
+            return "Full-body portrait fallback disabled: vanilla behaviour only.";
+        }
+
+        return "Invalid argument '" + arg + "'. Usage: ACS.FullPortrait on|off";
+    }
+
+    /// <summary>
+    /// 查询 / 调整对话全身立绘的布局。
+    /// 用法：ACS.PortraitLayout                  → 查询当前布局
+    ///      ACS.PortraitLayout 0.9              → 高度 = 屏高 × 0.9
+    ///      ACS.PortraitLayout 0.9 120          → 高度 0.9、水平偏移 120px
+    ///      ACS.PortraitLayout 0.9 120 30       → 再加垂直偏移 30px（距底边）
+    ///      ACS.PortraitLayout 0.9 120 30 right → 锚到右下角（left = 左下，默认）
+    ///      ACS.PortraitLayout reset            → 复位默认（0.85 / 8 / 0 / left）
+    /// 锚点：父级（对话面板根，铺满屏）的左下或右下角，pivot 同角，偏移按像素。
+    /// 改完重新打开对话生效。
+    /// </summary>
+    [ConsoleCommand]
+    public static string PortraitLayout(string arg = "")
+    {
+        string Cur()
+            => $"heightRatio={FullPortraitPatch.HeightRatio:0.00}"
+               + $" x={FullPortraitPatch.OffsetX:0} y={FullPortraitPatch.OffsetY:0}"
+               + $" anchor={(FullPortraitPatch.AnchorRight ? "right" : "left")}";
+
+        if (arg.IsEmpty()) {
+            return "Portrait layout: " + Cur()
+                + ". Usage: ACS.PortraitLayout <heightRatio> [x] [y] [left|right] | reset";
+        }
+
+        string a = arg.Trim().ToLowerInvariant();
+        if (a == "reset") {
+            FullPortraitPatch.ResetLayout();
+            return "Portrait layout reset: " + Cur();
+        }
+
+        string[] parts = a.Split(new[] { ' ', ',', '\t' }, System.StringSplitOptions.RemoveEmptyEntries);
+        if (float.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out float hr)) {
+            if (hr < 0.1f || hr > 2f) {
+                return "heightRatio out of range (0.10 ~ 2.00).";
+            }
+
+            FullPortraitPatch.HeightRatio = hr;
+        }
+        else {
+            return "Invalid heightRatio '" + parts[0] + "'.";
+        }
+
+        if (parts.Length > 1
+            && float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float x)) {
+            FullPortraitPatch.OffsetX = x;
+        }
+
+        if (parts.Length > 2
+            && float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float y)) {
+            FullPortraitPatch.OffsetY = y;
+        }
+
+        for (int i = 1; i < parts.Length; i++) {
+            if (parts[i] == "right") {
+                FullPortraitPatch.AnchorRight = true;
+            }
+            else if (parts[i] == "left") {
+                FullPortraitPatch.AnchorRight = false;
+            }
+        }
+
+        return "Portrait layout: " + Cur() + " (re-open dialogue to apply)";
+    }
 }
