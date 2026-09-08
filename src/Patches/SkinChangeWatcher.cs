@@ -11,6 +11,10 @@ namespace ACS.Patches;
 /// LastWriteTime（工作流 = 切出去改图 → 切回看效果）。检测到变化后等待“稳定窗口”
 /// （文件写完不再变化）再触发重载。兜底命令 ACS.ReloadAcs。
 ///
+/// ⚠️ 默认关闭：每次切回前台的全量 mtime 扫描（最多跟踪 3000 文件）在文件多时
+/// 会让“切回游戏”卡 1-2 秒，即使什么都没改。需要热更时用命令打开：
+///   ACS.AutoReload on / off
+///
 /// 重载分两级，避免每次全量 ListSkins 卡 1-2 秒：
 ///  - 纯 PNG 内容变化（最常见：改图重导）→ 只失效被改的 SpriteData + 只刷新用了
 ///    该皮肤的在场角色（轻量，几乎无感）
@@ -21,6 +25,10 @@ namespace ACS.Patches;
 /// </summary>
 internal static class SkinChangeWatcher
 {
+    /// <summary>热更总开关（默认关）。关时 Tick 完全短路：不做前台检测、不扫磁盘、
+    /// 不触发重载，切回游戏零开销。开启后需经历一次“后台→前台”边沿才会执行首次扫描。</summary>
+    internal static bool Enabled { get; set; } = false;
+
     private const long StableWindowTicks = TimeSpan.TicksPerSecond * 3; // 稳定 3 秒才重载
     private const int MaxTrackedFiles = 3000; // 防御上限
 
@@ -42,6 +50,13 @@ internal static class SkinChangeWatcher
 
     internal static void Tick(int frameCount)
     {
+        if (!Enabled) {
+            // 关闭期间恒视为“上次在前台”：这样重新开启后，下一次“切回前台”边沿
+            // 才会触发扫描，避免刚开命令就把后台期间改过的文件误判重载。
+            _wasFocused = true;
+            return;
+        }
+
         bool focused = Application.isFocused;
 
         if (focused) {
