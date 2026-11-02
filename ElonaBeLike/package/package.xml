@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Meta>
+  <title>Elona Be Like</title>
+  <id>elonabelike.elonabelike</id>
+  <author>elonabelike</author>
+  <builtin>false</builtin>
+  <loadPriority>100</loadPriority>
+  <version>2.2.0</version>
+  <tags>Gameplay,Utility</tags>
+  <description>野外行动整合包。右键小地图格子派队友守住或巡逻，被命令的队友交战时玩家获得战略技能经验（照搬原版自动战斗的数值）。玩家直接共享队伍成员的视野（受战略等级影响，随队友自身视野封顶）。对树按中键或 R 键弹出动作菜单可「踢」：果树掉果实，普通树按 40% 叶子 / 40% 树枝 / 20% 波球结算，每棵树只生效一次。队友/敌人标记可在游戏内的 Mod 配置界面开关。世界地图的战争迷雾已拆成独立的 Warfog mod。</description>
+  <visibility>Public</visibility>
+</Meta>

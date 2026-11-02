@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Meta>
+  <title>Peek Around Corners</title>
+  <id>deux.peek</id>
+  <author>Deux</author>
+  <builtin>false</builtin>
+  <loadPriority>100</loadPriority>
+  <version>1.0.0</version>
+  <tags></tags>
+  <description>CDDA-inspired peek: look around corners without being seen. / 受 CDDA 启发的窥视：拐角观察敌人而不被发现。 / CDDA 風の覗き見：角の先を身を隠したまま観察できます。</description>
+  <visibility>Public</visibility>
+</Meta>

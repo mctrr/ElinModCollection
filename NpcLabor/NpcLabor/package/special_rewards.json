@@ -1,0 +1,40 @@
+{
+  "rewards": [
+    {
+      "zoneId": "cave_dragon",
+      "zoneAlias": "",
+      "regionKind": "",
+      "items": []
+    },
+    {
+      "zoneId": "",
+      "zoneAlias": "example_unused",
+      "regionKind": "",
+      "items": [ "money" ]
+    },
+    {
+      "zoneId": "",
+      "zoneAlias": "",
+      "regionKind": "beach",
+      "items": [ "sand_sea", "sea sand", "sand", "salt", "shell", "coral" ]
+    },
+    {
+      "zoneId": "",
+      "zoneAlias": "",
+      "regionKind": "forest",
+      "items": [ "vine", "mushroom", "grape", "apple", "berry", "banana", "palulu", "log" ]
+    },
+    {
+      "zoneId": "",
+      "zoneAlias": "",
+      "regionKind": "mountain",
+      "items": [ "copper", "iron", "plastic", "sulfur", "stone", "gem", "ore_gem" ]
+    },
+    {
+      "zoneId": "",
+      "zoneAlias": "",
+      "regionKind": "plain",
+      "items": [ "pasture", "flower", "meat:putty", "meat:chicken", "meat:sheep", "meat:cow" ]
+    }
+  ]
+}

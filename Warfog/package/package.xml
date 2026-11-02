@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Meta>
+  <title>战争迷雾 (Warfog)</title>
+  <id>mctrr.warfog</id>
+  <author>mctrr</author>
+  <builtin>false</builtin>
+  <loadPriority>100</loadPriority>
+  <version>1.0.0</version>
+  <tags>Gameplay,Utility</tags>
+  <description>
+[h1]战争迷雾 (Warfog)[/h1]
+
+[i]你是第一次来到这个世界，北提里斯不该一睁眼就摊成一张完整的地图。[/i]
+
+给世界地图盖上战争迷雾。
+
+为什么要做这个：迷雾是用来换沉浸感的。地图全开的时候你只是在点一个图标，
+盖上之后你得先走过去、先认识路。
+
+[b]可以随便卸载。[/b]删掉就是原版地图。不改游戏本体文件，不改存档结构，已有存档照常读取，
+随时装回来也行。
+  </description>
+  <visibility>Public</visibility>
+</Meta>

@@ -1,0 +1,44 @@
+{
+  "features": {
+    "enabled": true,
+    "dispatch": true,
+    "townLabor": true,
+    "craft": true
+  },
+  "townLabor": {
+    "minWagePerHour": 50,
+    "expPerHour": 12,
+    "furnitureTicketChancePercent": 20,
+    "hoursMin": 2,
+    "hoursMax": 6,
+    "investTownHeadroom": 5,
+    "platBase": 2,
+    "platPerInvestTier": 2,
+    "investTierSize": 20,
+    "affinityBase": 5
+  },
+  "dispatch": {
+    "lockpickPerChest": 20,
+    "lockpickMaxChests": 12,
+    "bossRewardMult": 1.2,
+    "regionSpecialtyMult": 2,
+    "expExploreSuccess": 80,
+    "expExploreFailure": 40,
+    "expExploreRecall": 20,
+    "expLockpickSuccess": 50,
+    "expLockpickFailure": 25,
+    "expLockpickRecall": 10,
+    "expGatherSuccess": 60,
+    "expGatherFailure": 30,
+    "expGatherRecall": 15,
+    "fameBase": 30,
+    "famePerDanger": 2
+  },
+  "process": {
+    "npcSpeedMultiplier": 0.25
+  },
+  "unlock": {
+    "regionBranchLv": 3,
+    "dungeonBranchLv": 5
+  }
+}

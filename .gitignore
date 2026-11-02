@@ -1,39 +1,45 @@
-﻿# Build output
-[Bb]in/
-[Oo]bj/
-
-# Local research / decompile dumps / helper scripts (not mod content)
+# --- 本地工作目录 / 笔记（不进仓库）---
+.workbuddy/
+.agents/
+_scratch/
+_elinmeta/
 .research/
 .tools/
-.tmp_*
-_elinmeta/
---force/
-.agents/
-# Visual Studio / VS Code
-.vs/
-.vscode/
+tools/
+design/
+docs/
+handoff.md
+AGENTS.md
+RESEARCH.md
+NOTES.md
+
+# --- 反编译的游戏源码（版权原因，绝不入库）---
+.game-src/
+game-src/
+
+# --- 浏览器 / 调试临时文件 ---
+.tmp*
+*.tmp
+*.log
+
+# --- 构建产物 ---
+[Bb]in/
+[Oo]bj/
 *.user
 *.suo
 *.userprefs
 *.cache
-
-# NuGet
+project.lock.json
 *.nupkg
 *.snupkg
-project.lock.json
-# keep packages.lock.json for reproducible restore
 
-# OS
+# --- 大体积素材（封面 / 预览集合）---
+covers/
+
+# --- 系统 / 编辑器 ---
 Thumbs.db
 ehthumbs.db
 Desktop.ini
 .DS_Store
-
-# Logs / temp
-*.log
-*.tmp
-*~
-
-# WorkBuddy replay temp scripts
-.wb_*
-
+.vs/
+.vscode/

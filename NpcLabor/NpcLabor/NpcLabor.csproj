@@ -1,0 +1,65 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <Platforms>AnyCPU</Platforms>
+    <LangVersion>preview</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>NpcLabor</RootNamespace>
+    <AssemblyName>NpcLabor</AssemblyName>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateDependencyFile>false</GenerateDependencyFile>
+    <OutputPath>$(ElinGamePath)\Package\Mod_$(AssemblyName)\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <DisableImplicitFrameworkReferences>true</DisableImplicitFrameworkReferences>
+    <DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <Deterministic>false</Deterministic>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="package\**" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Remove="package\**" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Remove="Directory.Build.props" />
+    <None Remove="README.md" />
+  </ItemGroup>
+  <!--
+    Build stamp. Every build is identifiable from the DLL alone:
+      ProductVersion = 1.14.514+<sha> <local build time>   (AssemblyInformationalVersion)
+      FileVersion    = 1.14.514.<commit count>             (AssemblyFileVersion)
+    AssemblyVersion stays pinned at 1.14.514 - that is the binary identity, not a date.
+    Read back with: (Get-Item X.dll).VersionInfo | fl FileVersion,ProductVersion
+    Generated into obj/ so it never lands in git.
+  -->
+  <Target Name="GenerateBuildStamp" BeforeTargets="BeforeCompile">
+    <Exec Command="git describe --always --dirty" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardOutputImportance="low" StandardErrorImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="BuildShaRaw" />
+    </Exec>
+    <Exec Command="git rev-list --count HEAD" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardOutputImportance="low" StandardErrorImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="BuildRevRaw" />
+    </Exec>
+    <PropertyGroup>
+      <BuildSha Condition="'$(BuildShaRaw)' != ''">$([System.String]::Copy('$(BuildShaRaw)').Trim())</BuildSha>
+      <BuildSha Condition="'$(BuildSha)' == ''">nogit</BuildSha>
+      <!-- Commit count, monotonic. FileVersion segments are ushort, so this caps at 65535. -->
+      <BuildRev Condition="'$(BuildRevRaw)' != ''">$([System.String]::Copy('$(BuildRevRaw)').Trim())</BuildRev>
+      <BuildRev Condition="'$(BuildRev)' == ''">0</BuildRev>
+      <BuildTime>$([System.DateTime]::Now.ToString('yyyy-MM-dd HH:mm'))</BuildTime>
+      <BuildStampFile>$(IntermediateOutputPath)BuildStamp.g.cs</BuildStampFile>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(BuildStampFile)" Overwrite="true" WriteOnlyWhenDifferent="true"
+      Lines="// &lt;auto-generated/&gt;  GenerateBuildStamp (NpcLabor.csproj)%3B do not edit, do not commit.;namespace NpcLabor;{;    internal static class BuildStamp;    {;        internal const string Sha = &quot;$(BuildSha)&quot;%3B;        internal const string Rev = &quot;$(BuildRev)&quot;%3B;        internal const string Time = &quot;$(BuildTime)&quot;%3B;        internal const string Id = Sha + &quot; &quot; + Time%3B;    };}" />
+    <ItemGroup>
+      <Compile Include="$(BuildStampFile)" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="CopyAssets" AfterTargets="AfterBuild">
+    <ItemGroup>
+      <Assets Include="package\**\*.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(Assets)" DestinationFiles="@(Assets->'$(OutDir)%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

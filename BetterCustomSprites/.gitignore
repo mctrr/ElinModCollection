@@ -1,0 +1,39 @@
+﻿# Build output
+[Bb]in/
+[Oo]bj/
+
+# Local research / decompile dumps / helper scripts (not mod content)
+.research/
+.tools/
+.tmp_*
+_elinmeta/
+--force/
+.agents/
+# Visual Studio / VS Code
+.vs/
+.vscode/
+*.user
+*.suo
+*.userprefs
+*.cache
+
+# NuGet
+*.nupkg
+*.snupkg
+project.lock.json
+# keep packages.lock.json for reproducible restore
+
+# OS
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# Logs / temp
+*.log
+*.tmp
+*~
+
+# WorkBuddy replay temp scripts
+.wb_*
+
