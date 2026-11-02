@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using ACS.API;
+using ACS.Frame;
+using ACS.Skin;
 using HarmonyLib;
 using UnityEngine;
 
@@ -26,9 +28,9 @@ internal class PccRenderPatch
     private static bool _tempsSaved;
 
     // 按 actor 分状态推进帧，避免多 PCC 共享 _sharedTimer 串帧
-    // 逐帧推进状态机（原 FrameState）已抽到共享的 ClipPlayback.State（见 ClipPlayback.cs），
+    // 逐帧推进状态机（原 FrameState）已抽到共享的 ClipClock.State（见 ClipClock.cs），
     // 这里只留“actor.InstanceID → 状态”的字典，键与清理入口 ClearRuntimeCaches 不变。
-    private static readonly Dictionary<int, ClipPlayback.State> FrameByActor = new Dictionary<int, ClipPlayback.State>();
+    private static readonly Dictionary<int, ClipClock.State> FrameByActor = new Dictionary<int, ClipClock.State>();
 
     // 按 actor 实例分别记左右朝向；禁止全局共享（NPC 会污染 PC 的 W/S）
     private static readonly Dictionary<int, bool> FlipByActor = new Dictionary<int, bool>();
@@ -116,9 +118,14 @@ internal class PccRenderPatch
             SpriteTimerRef(__instance) = 0f;
             SpriteIndexRef(__instance) = 0;
             // 单帧 revive / greet 也要清一次性标记，否则会粘死
-            AcsStateResolver.StopOneShotIfLastFrame(owner, data.frame, 0);
+            PlayState.StopOneShotIfLastFrame(owner, data.frame, 0);
         }
         ApplyAcsSprite(__instance, data, p);
+        if (owner is not null) {
+            // 睡觉 / 死亡：按整图重算横躺落点（见 ApplyDeadOrSleepPose 注释）
+            AcsSpritePresenter.ApplyDeadOrSleepPose(owner, __instance);
+            AcsSpritePresenter.ProbePose("PC", owner, __instance, p.y);
+        }
         // ACS 身体是 SpriteRenderer，可能盖住 mesh 手持物；在 ACS 之后再画一次手持
         DrawHeldInFront(__instance, p, owner);
     }
@@ -153,7 +160,7 @@ internal class PccRenderPatch
             return false;
         }
         // ACS 动态 clip 或静态 Package Skin 均可叠在 PCC 上
-        return AcsSuffixes.Resolve(owner) is not null
+        return SkinIndex.ResolveSuffixes(owner) is not null
             || PcSkinPatch.GetStaticSkinData(owner.spriteReplacer) is not null;
     }
 
@@ -175,13 +182,13 @@ internal class PccRenderPatch
         // 读档/冷启动：spriteReplacer 为空或尚无可用 skin 时重绑
         if (!o.c_idSpriteReplacer.IsEmpty() && o.renderer is CharaRenderer cr
             && (o.spriteReplacer is null
-                || (AcsSuffixes.Resolve(o) is null
+                || (SkinIndex.ResolveSuffixes(o) is null
                     && PcSkinPatch.GetStaticSkinData(o.spriteReplacer) is null))) {
             PcSkinPatch.TryApplyPcSkin(cr);
         }
 
         // 优先动态 ACS（多帧）；否则回退静态 Package Skin 底图
-        var suffixes = AcsSuffixes.Resolve(o);
+        var suffixes = SkinIndex.ResolveSuffixes(o);
         if (suffixes is not null) {
             var clip = o.GetAcsClip(snow, suffixes);
             if (clip is not null) {
@@ -206,12 +213,12 @@ internal class PccRenderPatch
     {
         int actorKey = __instance.GetInstanceID();
         if (!FrameByActor.TryGetValue(actorKey, out var st) || st is null) {
-            st = new ClipPlayback.State();
+            st = new ClipClock.State();
             FrameByActor[actorKey] = st;
         }
 
         // 同帧去重 + sig/clip 变化重播 + timer 累进 + 帧钳制与 NPC 端 AdvanceAndApply
-        // 共用同一套 ClipPlayback.State.StepFrame，避免两条路径各自维护导致行为漂移。
+        // 共用同一套 ClipClock.State.StepFrame，避免两条路径各自维护导致行为漂移。
         int index = st.StepFrame(owner, data);
         SpriteTimerRef(__instance) = st.Timer;
         SpriteIndexRef(__instance) = index;
@@ -227,6 +234,9 @@ internal class PccRenderPatch
             if (__instance.sr is null || __instance.mpb is null) {
                 return;
             }
+
+            // 按需释放的「在用」信号：底图与 _acs_ 片都要续期（理由同 RenderFramePatch）。
+            SpriteCacheEvict.Touch(data);
 
             // ACS 横条：显示前校正 frame 并确保 sprites 按帧切开
             // （避免 frame=1 时切出整条 1920 宽图，move 看起来比 idle 大很多）
@@ -262,8 +272,8 @@ internal class PccRenderPatch
                 return;
             }
 
-            // 功能C：直接用原版中心 pivot Sprite（与 NPC / SpriteData.LoadSprites 一致）。
-            // 底轴 GetBottomPivotSprite 在去掉 Y hack 后会脚底浮空；对齐 NPC 几何优先。
+            // 用原版中心 pivot Sprite（与 NPC / SpriteData.LoadSprites 一致）。
+            // Y 定位见下方：PC 与 NPC 用的是两套原版数据，差值由 ResolveNpcAlignmentDy 补齐。
 
             // 每帧用 owner.angle 刷新 provider（WASD 改的是 angle）
             if (__instance.provider is not null && __instance.owner is not null) {
@@ -275,10 +285,7 @@ internal class PccRenderPatch
 
             __instance.sr.sprite = sprite;
             __instance.sr.flipX = flip;
-            // 功能3：显示前再确保 Point（静态 skin 可能不经 EnsureAcsSprites）
-            if (sprite.texture.filterMode != FilterMode.Point) {
-                sprite.texture.filterMode = FilterMode.Point;
-            }
+            // 不改 texture.filterMode：原版 IO.LoadPNG 默认 Point，BCS 自造的贴图在创建时已设。
             __instance.mpb.SetTexture("_MainTex", sprite.texture);
 
             if (__instance.transform is not null) {
@@ -300,17 +307,19 @@ internal class PccRenderPatch
                     passScale.z * m);
                 __instance.transform.localScale = localScale;
 
-                // 功能E3：中心 pivot 叠在 PCC 脚底锚点 → clip 级稳定抬升（半高 − 全帧最小 pad）。
-                // 禁止按动画帧改 Y（E2 逐帧 pad 会抖）；lift 已量化到 0.01，加在原版已 snap 的 base 上。
-                // 固定下移：动态 ACS 3px；静态单帧再上 1px（2px），因 lift 按各自 pad 算，固定量需分开。
-                // 必须沿 transform.up（local Y→世界）加，不能写死 world Y：
-                // 睡觉/死亡 subDeadPCC 会旋转，站立的“半高”在躺姿下变成水平位移；
-                // 只加 world Y → 悬浮；完全不加 → 中心落在锚点，身子偏到邻格。
-                float liftY = AcsSpritePresenter.ResolveCenterPivotLiftY(data, localScale.y);
-                float yNudge = data.frame > 1 ? -0.03f : -0.02f;
-                Vector3 pos = __instance.transform.position;
-                pos += __instance.transform.up * (liftY + yNudge);
-                __instance.transform.position = pos;
+                // **Y 定位 = 原版 NPC 那一套**。PC 因为 pccData，CardRenderer.GetPref() 返回
+                // refs.prefs.pcc、renderer.data 是 RenderDataPcc；NPC 走的是 Chara.Pref +
+                // 种族 RenderData。两套只差一个常量，这里补上（见 AcsSpritePresenter.ResolveNpcAlignmentDy）。
+                var alignOwner = __instance.owner;
+                float alignDy = AcsSpritePresenter.PcYAdjust;
+                if (alignOwner is not null) {
+                    alignDy += AcsSpritePresenter.ResolveNpcAlignmentDy(alignOwner, alignOwner.renderer?.data, alignOwner.dir);
+                }
+                if (alignDy != 0f) {
+                    Vector3 pos = __instance.transform.position;
+                    pos += Vector3.up * alignDy;
+                    __instance.transform.position = pos;
+                }
             }
 
             Texture2D tex = sprite.texture;
@@ -360,7 +369,7 @@ internal class PccRenderPatch
             }
 
             // 3) 施法窗口：朝向目标的屏幕水平方向（原版 LookAt 改了 angle，PC ACS 不读 angle）
-            if (AcsStateResolver.TryGetMagicFaceRight(owner, out bool magicRight)) {
+            if (PlayState.TryGetMagicFaceRight(owner, out bool magicRight)) {
                 lastFlip = magicRight;
                 FlipByActor[key] = lastFlip;
                 return lastFlip;
@@ -494,42 +503,6 @@ internal class PccRenderPatch
         return true;
     }
 
-    /// <summary>
-    /// ACS 覆盖后只重绘「工具类」手持物；装备武器（含战斗时）一律不画，
-    /// 避免盖住/干扰 _acs_combat 动态贴图。
-    /// ACS 全身图叠在 PCC 脚底锚点上，原版 heldPos 会落在脚边。
-    /// clip .ini 的 bcs_heldX/bcs_heldY 是 100 ppu 像素偏移，叠在原版 heldPos 上
-    /// （bcs_ 前缀 = BCS 扩展键，原版忽略）。
-    /// </summary>
-    [HarmonyPrefix]
-    [HarmonyPatch(typeof(CharaRenderer), nameof(CharaRenderer.DrawHeld))]
-    internal static void OnDrawHeldPrefix(CharaRenderer __instance)
-    {
-        try {
-            var owner = __instance.owner;
-            if (owner is null || owner.held is null) {
-                return;
-            }
-
-            var suffixes = AcsSuffixes.Resolve(owner);
-            if (suffixes is null) {
-                return;
-            }
-
-            bool snow = EClass.core.IsGameStarted && EClass._zone is not null && EClass._zone.IsSnowCovered;
-            var clip = owner.GetAcsClip(snow, suffixes);
-            if (!AcsClipIni.TryGetHeldOffset(clip, out Vector2 off)) {
-                return;
-            }
-
-            float x = owner.flipX ? -off.x : off.x;
-            RenderObject.currentParam.x += x;
-            RenderObject.currentParam.y += off.y;
-        }
-        catch (Exception) {
-        }
-    }
-
     private static void DrawHeldInFront(CharaActorPCC actor, RenderParam p, Chara owner)
     {
         try {
@@ -540,7 +513,7 @@ internal class PccRenderPatch
                 return;
             }
             // 战斗中完全不画手持/武器，交给 combat ACS
-            if (AcsStateResolver.IsCombatVisual(owner)) {
+            if (PlayState.IsCombatVisual(owner)) {
                 return;
             }
             // 拿着非工具 held 时不画

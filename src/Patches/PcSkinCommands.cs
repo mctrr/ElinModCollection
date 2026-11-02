@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using ACS.API;
+using ACS.Frame;
+using ACS.Skin;
+using ACS.Tiling;
 using ReflexCLI.Attributes;
 
 namespace ACS.Patches;
@@ -28,7 +31,7 @@ internal static class PcSkinCommands
             return "Usage: ACS.SetSkin <skinId>";
         }
 
-        skinId = PcSkinPatch.NormalizeSkinId(skinId);
+        skinId = SkinIndex.NormalizeId(skinId);
         SpriteReplacer.ListSkins();
         var skin = SpriteReplacer.dictSkins.TryGetValue(skinId);
         if (skin is null) {
@@ -82,14 +85,14 @@ internal static class PcSkinCommands
             return "PC not found.";
         }
 
-        var states = AcsStateResolver.ListEmoteStates(pc);
+        var states = PlayState.ListEmoteStates(pc);
         if (states.Count == 0) {
             return "No emote ACS clip on current skin.";
         }
 
         if (clip.IsEmpty()) {
             if (states.Count == 1) {
-                return AcsStateResolver.StartEmote(pc, states[0])
+                return PlayState.StartEmote(pc, states[0])
                     ? "Emote started: " + states[0]
                     : "Failed to start emote.";
             }
@@ -107,36 +110,34 @@ internal static class PcSkinCommands
             }
         }
 
-        return AcsStateResolver.StartEmote(pc, resolved)
+        return PlayState.StartEmote(pc, resolved)
             ? "Emote started: " + resolved
             : "Failed to start emote.";
     }
 
     /// <summary>
-    /// Reload PNG without restart: clear lift/pad/frame caches, ListSkins, rebind PC.
+    /// Reload PNG without restart: clear runtime caches, ListSkins, rebind PC.
     /// Does not hot-swap the DLL; resources and runtime caches only.
     /// </summary>
     [ConsoleCommand]
     public static string ReloadAcs() => ReloadAcsCore();
 
-    /// <summary>手动命令与自动热重载共用的重载主体。</summary>
+    /// <summary>手动全量重载主体（改图/加角色后敲一次 ACS.ReloadAcs）。</summary>
     internal static string ReloadAcsCore()
     {
         try {
-            AcsSpritePresenter.ClearCaches();
             PccRenderPatch.ClearRuntimeCaches();
             RenderFramePatch.ClearRuntimeCaches(); // NPC 侧：帧推进 + 战斗贴图“已应用”去重
-            AcsStateResolver.ClearHostileScanCache();
-            ACS.API.StaticCombatMap.Invalidate();
+            PlayState.ClearHostileScanCache();
+            FrameChoice.InvalidateStaticCombatMap();
+            TiledSprite.Clear();                   // 分片贴图 store：连字节账一起丢，强制重解
 
             TextureSkinCatalog.Invalidate();
             SkinListPatch.ClearLoadedSprites();
             SpriteReplacer.ListSkins();
-            // ListSkins 已把 watcher 文件基线更新为磁盘最新值；清 pending 防自触发
-            SkinChangeWatcher.ResetBaseline();
             PcSkinBinder.Ensure("ReloadAcs", forceListSkins: false);
 
-            // 强制在场换肤角色重烘焙（静态底图 idle 的 _Rect / 贴图靠 RefreshSprite
+            // 强制在场换肤角色重烘焙（动态底图 idle 的 _Rect / 贴图靠 RefreshSprite
             // 刷新；改图后不主动刷会一直显示旧烘焙结果）。
             int refreshed = 0;
             var map = EClass._map;
@@ -168,123 +169,4 @@ internal static class PcSkinCommands
         }
     }
 
-    /// <summary>
-    /// 热更两级入口：
-    ///  - <paramref name="structural"/>（ini 变更 / 文件删除 / 无变更集）→ 全量 ReloadAcsCore
-    ///  - 纯 PNG 内容变化 → 只失效对应 SpriteData + 只刷新用到它的在场角色，避免
-    ///    ListSkins 重建数百 PCR 皮肤导致的主线程 1-2 秒卡顿。
-    /// </summary>
-    internal static string ReloadChangedSkins(bool structural, string[] changedFiles)
-    {
-        try {
-            if (structural || changedFiles is null || changedFiles.Length == 0) {
-                return ReloadAcsCore();
-            }
-
-            // 变更路径归一为“无 .png 后缀”以便与 SpriteData.path 匹配
-            var paths = new HashSet<string>(StringComparer.Ordinal);
-            foreach (string f in changedFiles) {
-                string p = f;
-                if (p.EndsWith(".png", StringComparison.OrdinalIgnoreCase)) {
-                    p = p.Substring(0, p.Length - 4);
-                }
-
-                paths.Add(p);
-            }
-
-            // 1) 失效命中的 SpriteData（懒加载路径会在下次渲染时重读磁盘新 PNG）
-            int invalidated = 0;
-            var skins = SpriteReplacer.dictSkins;
-            if (skins != null) {
-                foreach (var skin in skins.Values) {
-                    if (skin is null) {
-                        continue;
-                    }
-
-                    if (InvalidateIfHit(skin.data, paths)) {
-                        invalidated++;
-                    }
-
-                    if (skin.suffixes != null) {
-                        foreach (var sd in skin.suffixes.Values) {
-                            if (InvalidateIfHit(sd, paths)) {
-                                invalidated++;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 1.5) 清 NPC 侧帧推进/战斗去重缓存，防改图后旧帧被“已应用”去重钉住
-            RenderFramePatch.ClearRuntimeCaches();
-
-            // 2) 只刷新“用到被改皮肤的”在场角色（静态底图靠 RefreshSprite 重烘焙 _Rect）
-            int refreshed = 0;
-            var map = EClass._map;
-            if (map?.charas != null) {
-                foreach (var c in map.charas) {
-                    if (c is null || c.IsPC || c.c_idSpriteReplacer.IsEmpty()) {
-                        continue;
-                    }
-
-                    if (ReplacerTouches(c.spriteReplacer, paths)
-                        && c.renderer is CharaRenderer cr) {
-                        cr.RefreshSprite();
-                        refreshed++;
-                    }
-                }
-            }
-
-            var pc = EClass.pc;
-            if (pc is not null
-                && ReplacerTouches(pc.spriteReplacer, paths)
-                && pc.renderer is CharaRenderer pcr) {
-                pcr.RefreshSprite();
-                refreshed++;
-            }
-
-            return $"ACS hot-reloaded: {invalidated} sprite(s) invalidated, {refreshed} actor(s) refreshed"
-                   + (structural ? " (full)" : " (light)");
-        }
-        catch (Exception ex) {
-            AcsMod.Warn($"ReloadChangedSkins failed: {ex.Message}; falling back to full reload");
-            return ReloadAcsCore();
-        }
-    }
-
-    private static bool InvalidateIfHit(SpriteData? data, HashSet<string> paths)
-    {
-        if (data is null || data.path.IsEmpty() || !paths.Contains(data.path)) {
-            return false;
-        }
-
-        SkinListPatch.InvalidateData(data);
-        return true;
-    }
-
-    private static bool ReplacerTouches(SpriteReplacer? replacer, HashSet<string> paths)
-    {
-        if (replacer is null) {
-            return false;
-        }
-
-        if (DataTouches(replacer.data, paths)) {
-            return true;
-        }
-
-        if (replacer.suffixes is null) {
-            return false;
-        }
-
-        foreach (var sd in replacer.suffixes.Values) {
-            if (DataTouches(sd, paths)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static bool DataTouches(SpriteData? data, HashSet<string> paths)
-        => data is not null && !data.path.IsEmpty() && paths.Contains(data.path);
 }

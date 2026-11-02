@@ -2,56 +2,26 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Runtime.CompilerServices;
-using UnityEngine;
 
 namespace ACS.Patches;
 
 /// <summary>
-/// ACS clip .ini extras. Vanilla only reads frame/time/scale;
-/// bcs_heldX/bcs_heldY are BCS extension keys (bcs_ prefix = BCS-owned; vanilla ignores unknown keys)
-/// for eat (and any clip) held-item offset, in pixels at 100 ppu.
+/// ACS clip 的 .ini 补写。
+/// 只有「文件名里读不出帧数」的片才需要它：帧数/时长/缩放能由路径解析出来的，一律不写盘
+/// （原版 LoadAnimationIni 之后 BCS postfix 会按文件名把三键盖回去，ini 纯冗余）。
 /// </summary>
 internal static class AcsClipIni
 {
-    private static readonly Dictionary<int, Vector2> HeldCache = new Dictionary<int, Vector2>();
-    private static readonly HashSet<int> HeldKnown = new HashSet<int>();
-
-    internal static void ClearCaches()
-    {
-        HeldCache.Clear();
-        HeldKnown.Clear();
-    }
-
-    internal static bool TryGetHeldOffset(SpriteData? data, out Vector2 world)
-    {
-        world = Vector2.zero;
-        if (data is null || data.path.IsEmpty()) {
-            return false;
-        }
-
-        int key = RuntimeHelpers.GetHashCode(data);
-        if (HeldKnown.Contains(key)) {
-            return HeldCache.TryGetValue(key, out world);
-        }
-
-        HeldKnown.Add(key);
-        var map = ReadMap(data.path + ".ini");
-        TryParsePx(map, "bcs_heldX", out float x);
-        TryParsePx(map, "bcs_heldY", out float y);
-
-        if (x == 0f && y == 0f) {
-            return false;
-        }
-
-        world = new Vector2(x / 100f, y / 100f);
-        HeldCache[key] = world;
-        return true;
-    }
-
     internal static void WriteFrameMeta(SpriteData data)
     {
         if (data is null || data.path.IsEmpty()) {
+            return;
+        }
+
+        // 文件名带 _acs_xxx#interval_begin-end → 帧数/时长/缩放全在文件名里，
+        // 不写 ini、也不创建空文件（clip 收进子目录后保持目录干净）。
+        bool isAcs = data.path.IndexOf("_acs_", StringComparison.Ordinal) >= 0;
+        if (isAcs && SkinListPatch.ResolveClipFromPath(data) is { Length: > 0 }) {
             return;
         }
 
@@ -61,17 +31,6 @@ internal static class AcsClipIni
         map["time"] = data.time.ToString(CultureInfo.InvariantCulture);
         map["scale"] = data.scale.ToString(CultureInfo.InvariantCulture);
         WriteMap(path, map);
-    }
-
-    private static bool TryParsePx(Dictionary<string, string> map, string key, out float value)
-    {
-        value = 0f;
-        if (!map.TryGetValue(key, out string? raw) || raw.IsEmpty()) {
-            return false;
-        }
-
-        return float.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out value)
-            || float.TryParse(raw, NumberStyles.Float, CultureInfo.CurrentCulture, out value);
     }
 
     private static Dictionary<string, string> ReadMap(string path)

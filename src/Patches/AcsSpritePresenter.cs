@@ -1,54 +1,29 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
-using System.Runtime.CompilerServices;
 using UnityEngine;
 
 namespace ACS.Patches;
 
 /// <summary>
-/// PCC 上 ACS/静态 skin 的贴图呈现：scale 约定、底边留白对齐、bottom-pivot 缓存。
-/// 不强制 idle/move 同高——作者故意做大/做小的 clip 应原样保留。
+/// PCC 上 ACS/静态 skin 的贴图呈现：只做「作者声明值 → 世界倍率 / 几何位置」的换算。
+/// 不读像素、不按画面内容修正摆放——帧底留白之类的素材问题由作者改图，BCS 不代为对齐。
 /// </summary>
 internal static class AcsSpritePresenter
 {
-    // 100 ppu 下约 10 像素：PCC 站位相对地面的固定浮空补偿（与画幅无关）
-    internal const float GroundYOffset = 0;
-
-    // 兜底 PPU：@N 文件名 / pref scaleTex 未生效时保持 100（1x，旧行为）
-    private const float PixelsPerUnit = 100f;
-    private const byte AlphaThreshold = 10;
-
-    /// <summary>帧 sprite 实际 PPU（@N 切帧后 = 作者标注密度）；异常回退 100。</summary>
-    private static float PpuOf(Sprite? source)
-        => source is not null && source.pixelsPerUnit > 0f
-            ? source.pixelsPerUnit
-            : PixelsPerUnit;
-
-    // 源帧 sprite → bottom-pivot 副本
-    private static readonly Dictionary<int, Sprite> BottomPivotCache = new Dictionary<int, Sprite>();
-
-    // 源帧 sprite → 底边透明像素数（textureRect 底到首个不透明像素）
-    private static readonly Dictionary<int, float> BottomPaddingCache = new Dictionary<int, float>();
-
-    // clip 级中心 pivot 抬升缓存：key = RuntimeHelpers.GetHashCode(data) ^ (scaleKey*397)
-    // 禁止按动画帧改 Y，否则 pad 逐帧差会抖
-    private static readonly Dictionary<int, float> CenterLiftCache = new Dictionary<int, float>();
-
     /// <summary>
-    /// 换图 / 控制台重载：清 lift、底边 pad、bottom-pivot 缓存，避免旧 pad 错位。
+    /// PC 专属的额外垂直偏移（世界单位），默认 0 = <b>与 NPC 完全一致</b>。
+    /// BCS 不再对 PC 做任何自动抬升/补偿，落点就是原版 <c>CardActor.OnRender</c> 写好的位置；
+    /// 只有在素材的 <c>.pref</c> 也调不好站姿时，才用这个值手动加减（正数上抬、负数下沉）。
     /// </summary>
-    internal static void ClearCaches()
-    {
-        CenterLiftCache.Clear();
-        BottomPaddingCache.Clear();
-        BottomPivotCache.Clear();
-        AcsClipIni.ClearCaches();
-    }
+    internal static float PcYAdjust;
 
     /// <summary>
     /// 将 SpriteData.scale 映射为 PCC 叠加用的世界倍率。
-    /// ACS 用 100=1.0；原版静态 skin 用 50=1.0。
-    /// 只读作者写的 scale，不做跨 clip 归一。
+    /// 只看 scale 本身，不掺 frame 推断，也不做跨 clip 归一。
+    /// 两套约定（判据是声明值本身，不是猜）：
+    /// - 原版字段默认值 = 50（`public int scale = 50`；`.ini` 不存在、或 ini 里没有 scale 键时
+    ///   LoadAnimationIni 也落回 50）→ 50 必须映射成 1.0，否则所有未声明缩放的皮肤都缩一半。
+    /// - 作者显式声明时按 100 = 1.0（配套导出脚本写的就是 `scale=100`；BCS 给 ACS 固定写 100）。
     /// </summary>
     internal static float ResolveWorldScale(SpriteData data)
     {
@@ -56,230 +31,10 @@ internal static class AcsSpritePresenter
             return 1f;
         }
 
-        // ACS 多帧 clip 一律按 /100（ApplyClipMeta 固定写 100）
-        if (data.frame > 1 || data.scale >= 100) {
-            return data.scale / 100f;
-        }
-
-        // 静态 / 单帧：原版约定 scale 50 = 正常体型
-        return data.scale / 50f;
-    }
-
-    /// <summary>
-    /// 地面 Y 偏移 = PCC 浮空补偿 + 本帧底边透明留白（世界单位）。
-    /// 128×128 切片高度相同不代表脚底相同；只扫当前帧 rect 的底边 alpha。
-    /// </summary>
-    /// <param name="source">当前显示帧（切片后的单帧 Sprite，非整条 strip）</param>
-    /// <param name="worldScaleY">已应用到 transform 的 Y 缩放（含 SubPass × scale）</param>
-    internal static float ResolveGroundYOffset(Sprite? source, float worldScaleY)
-    {
-        float y = GroundYOffset;
-        if (source is null) {
-            return y;
-        }
-
-        float padPx = MeasureBottomPaddingPx(source);
-        if (padPx <= 0f) {
-            return y;
-        }
-
-        // bottom-pivot 时 pivot 在 rect 底边；底边透明 → 视觉脚底高于 pivot，需再下沉
-        // 像素→世界按帧实际 PPU（@N 高清帧 PPU>100 时 pad 世界值不变）
-        float scaleY = worldScaleY == 0f ? 1f : Mathf.Abs(worldScaleY);
-        y -= (padPx / PpuOf(source)) * scaleY;
-        return y;
-    }
-
-    /// <summary>
-    /// 中心 pivot 全身 ACS 叠在 PCC 脚底锚点上时的 Y 抬升（世界单位，clip 级稳定）。
-    /// 半高把图心抬到锚点上方；减去全 clip 最小底边留白，使视觉脚底落在锚点。
-    /// 结果量化到 0.01（与原版 PCC snap 同网格），动画换帧不改 Y。
-    /// 公式：lift = quantize01(halfWorldY − minPadWorldY)（&gt;= 0）。
-    /// </summary>
-    internal static float ResolveCenterPivotLiftY(SpriteData? data, float worldScaleY)
-    {
-        if (data is null) {
-            return 0f;
-        }
-
-        float scaleY = worldScaleY == 0f ? 1f : Mathf.Abs(worldScaleY);
-        // scale 量化进 key，避免浮点噪声拆缓存
-        int scaleKey = (int)(scaleY * 1000f + 0.5f);
-        int cacheKey = RuntimeHelpers.GetHashCode(data) ^ (scaleKey * 397);
-        if (CenterLiftCache.TryGetValue(cacheKey, out float cached)) {
-            return cached;
-        }
-
-        Sprite[]? sprites = null;
-        try {
-            sprites = data.GetSprites();
-        }
-        catch (Exception) {
-            CenterLiftCache[cacheKey] = 0f;
-            return 0f;
-        }
-
-        if (sprites is null || sprites.Length == 0) {
-            CenterLiftCache[cacheKey] = 0f;
-            return 0f;
-        }
-
-        float halfLocal = 0f;
-        float minPadPx = float.MaxValue;
-        float ppu = 0f;
-        bool any = false;
-        for (int i = 0; i < sprites.Length; i++) {
-            Sprite? s = sprites[i];
-            if (s is null || s.texture is null) {
-                continue;
-            }
-
-            any = true;
-            if (ppu <= 0f) {
-                ppu = PpuOf(s); // 同一条 strip 所有帧同 PPU，取首帧即可
-            }
-
-            float extY = s.bounds.extents.y;
-            if (extY > halfLocal) {
-                halfLocal = extY;
-            }
-
-            float pad = MeasureBottomPaddingPx(s);
-            if (pad < minPadPx) {
-                minPadPx = pad;
-            }
-        }
-
-        if (!any || halfLocal <= 0f) {
-            CenterLiftCache[cacheKey] = 0f;
-            return 0f;
-        }
-
-        if (minPadPx == float.MaxValue) {
-            minPadPx = 0f;
-        }
-
-        if (ppu <= 0f) {
-            ppu = PixelsPerUnit;
-        }
-
-        float halfWorldY = halfLocal * scaleY;
-        float padWorldY = (minPadPx / ppu) * scaleY;
-        float lift = halfWorldY - padWorldY;
-        if (lift < 0f) {
-            lift = 0f;
-        }
-
-        // 与 CardActor PCC 的 (int)(v*100)*0.01 同网格，保证 base+lift 仍贴格
-        lift = (float)(int)(lift * 100f + 0.5f) * 0.01f;
-        CenterLiftCache[cacheKey] = lift;
-        return lift;
-    }
-
-    /// <summary>
-    /// 当前帧 textureRect 内，从底边向上数连续透明行数（像素）。
-    /// 横条 strip 按帧切开后每帧各自量；同为 128 高时仍能区分脚底留白。
-    /// </summary>
-    internal static float MeasureBottomPaddingPx(Sprite source)
-    {
-        if (source is null || source.texture is null) {
-            return 0f;
-        }
-
-        int key = source.GetInstanceID();
-        if (BottomPaddingCache.TryGetValue(key, out float cached)) {
-            return cached;
-        }
-
-        float pad = 0f;
-        try {
-            Texture2D tex = source.texture;
-            Rect r = source.textureRect;
-            int x0 = Mathf.FloorToInt(r.x);
-            int y0 = Mathf.FloorToInt(r.y);
-            int w = Mathf.Max(1, Mathf.FloorToInt(r.width));
-            int h = Mathf.Max(1, Mathf.FloorToInt(r.height));
-
-            Color32[]? pixels = null;
-            try {
-                pixels = tex.GetPixels32();
-            }
-            catch (Exception) {
-                BottomPaddingCache[key] = 0f;
-                return 0f;
-            }
-
-            if (pixels is null || pixels.Length == 0) {
-                BottomPaddingCache[key] = 0f;
-                return 0f;
-            }
-
-            int texW = tex.width;
-            int stepX = Math.Max(1, w / 32);
-
-            // Unity 纹理 y=0 在底；textureRect.y 是帧底边
-            int opaqueMinY = int.MaxValue;
-            for (int y = 0; y < h; y++) {
-                int row = (y0 + y) * texW;
-                bool any = false;
-                for (int x = 0; x < w; x += stepX) {
-                    int idx = row + x0 + x;
-                    if (idx < 0 || idx >= pixels.Length) {
-                        continue;
-                    }
-
-                    if (pixels[idx].a > AlphaThreshold) {
-                        any = true;
-                        break;
-                    }
-                }
-
-                if (any) {
-                    opaqueMinY = y;
-                    break;
-                }
-            }
-
-            if (opaqueMinY != int.MaxValue && opaqueMinY > 0) {
-                pad = opaqueMinY;
-            }
-        }
-        catch (Exception) {
-            pad = 0f;
-        }
-
-        BottomPaddingCache[key] = pad;
-        return pad;
-    }
-
-    /// <summary>源帧 → 底轴 pivot 的 Sprite（缓存，避免每帧 Create）。</summary>
-    internal static Sprite? GetBottomPivotSprite(Sprite source)
-    {
-        if (source is null || source.texture is null) {
-            return null;
-        }
-
-        int key = source.GetInstanceID();
-        if (BottomPivotCache.TryGetValue(key, out var cached)
-            && cached != null
-            && cached.texture != null) {
-            return cached;
-        }
-
-        Sprite created = Sprite.Create(
-            source.texture,
-            source.textureRect,
-            new Vector2(0.5f, 0f),
-            PpuOf(source), // 与源帧同 PPU：@N 高清帧的副本保持相同世界尺寸
-            0u,
-            SpriteMeshType.FullRect);
-
-        if (created is null || created.texture is null) {
-            return null;
-        }
-
-        BottomPivotCache[key] = created;
-        return created;
+        // 旧判据是 `data.frame > 1 || data.scale >= 100`。那个 `frame > 1` 会让
+        // 「ini 写了 frame 但没写 scale」的皮肤（LoadAnimationIni 把 scale 落回默认 50、frame=N）
+        // 被当成声明值 100 用 → 直接缩成一半。
+        return data.scale >= 100 ? data.scale / 100f : data.scale / 50f;
     }
 
     /// <summary>仅作者 scale → 世界倍率；不跨 clip 压身高。</summary>
@@ -287,5 +42,274 @@ internal static class AcsSpritePresenter
     {
         _ = owner;
         return ResolveWorldScale(data);
+    }
+    /// <summary>
+    /// PC 叠 ACS / 静态整图时，PC 与 NPC 走的是两套原版定位数据，同一张图会固定差一个 Y：
+    /// <list type="bullet">
+    /// <item>NPC：<c>CardRenderer.GetPref()</c> → <c>Chara.Pref</c>（皮肤 pref），
+    /// <c>renderer.data</c> → 种族 <c>sourceCard.renderData</c>（<c>BindNpcCustomSkin</c> 用的就是这支）；</item>
+    /// <item>PC：<c>GetPref()</c> → <c>refs.prefs.pcc</c>，<c>renderer.data</c> → <c>refs.renderers.pcc</c>。</item>
+    /// </list>
+    /// 两套相减就是 PC 需要补的 Y。数值全部取自原版自身，没有硬编码偏移。
+    /// </summary>
+    internal static float ResolveNpcAlignmentDy(Chara owner, RenderData? pccData, int dir)
+    {
+        try {
+            var racePref = owner.Pref;
+            var pccPref = EClass.core?.refs?.prefs?.pcc;
+            if (pccData is null || racePref is null || pccPref is null) {
+                return 0f;
+            }
+
+            float npcY = racePref.y + ResolveCharaAnchorY(owner, dir);
+            float pcY = pccPref.y + OffsetY(pccData, dir);
+            float dy = npcY - pcY;
+            LogAlignment(owner, dy, npcY, pcY, pccData);
+            return dy;
+        }
+        catch (Exception) {
+            return 0f;
+        }
+    }
+
+    /// <summary>原版通用角色 <c>chara</c> RenderData 的资源路径（与 <c>RenderRow.pathRenderData</c> 同源）。</summary>
+    private const string CharaBaseRenderDataPath = CorePath.RenderData + "chara";
+    /// <summary>
+    /// 原版「普通角色」落点用的 RenderData 的 offset.y —— NPC 带同一张皮肤时用的就是它。
+    /// <para>
+    /// 普通角色的 sprite pivot 是 (0,0)（<c>RenderRow.GetSprite</c>），所以
+    /// <c>chara</c> 的 offset 是「脚底锚点」；而皮肤 / ACS 整图是中心 pivot
+    /// （<c>SpriteData.LoadSprites</c> 固定 (0.5,0.5)）。原版 <c>RenderRow.SetRenderData()</c>
+    /// 的 <c>@</c> 分支为此把 offset 补上 mesh 高的一半：实测
+    /// <c>chara</c>=(0.00,0.30) → 换出来的 <c>custom_chara</c>=(0.64,0.94)，y 正好 +0.64 = 1.28/2。
+    /// 这里照同一套算法取通用角色那一支，数值全部来自原版资源。
+    /// </para>
+    /// PC 的种族行指向 <c>pcc</c>（PCC 合成图专用锚点，offset.y=0.4），拿它自己比自己永远是 0，
+    /// 所以 PC 必须改用这一支；非 PC 角色的种族行本就跟 NPC 同源，直接用。
+    /// </summary>
+    private static float ResolveCharaAnchorY(Chara owner, int dir)
+    {
+        var race = owner.source?.renderData;
+        if (race is not null && race is not RenderDataPcc) {
+            return OffsetY(race, dir);
+        }
+
+        var baseData = ResourceCache.Load<RenderData>(CharaBaseRenderDataPath);
+        if (baseData is null) {
+            return 0f;
+        }
+
+        var pass = baseData.pass;
+        float center = pass is not null ? pass.pmesh.size.y * 0.5f : 0f;
+        return OffsetY(baseData, dir) + center;
+    }
+
+    /// <summary>
+    /// 原版 <c>RenderRow.SetRenderData()</c> 的 <c>@</c> 分支的等价物 —— 把「脚底锚点」形态的
+    /// 种族 RenderData 换成中心锚点版本。换贴图的角色必须有这一跳，否则会沉底半个身高：
+    /// <list type="bullet">
+    /// <item>原版普通角色 sprite 是底左 pivot（<c>RenderRow.GetSprite</c> 用 <c>Vector2.zero</c>），
+    /// 所以 <c>chara</c> 的 offset 是「脚底」；</item>
+    /// <item>皮肤 / ACS 整图是中心 pivot（<c>SpriteData.LoadSprites</c>），整张图会往下掉半个身高
+    /// （实测 128px @ PPU 100 = 1.28 世界高 → 0.64）。</item>
+    /// </list>
+    /// 原版只给 <c>@xxx</c> 行做补偿（<c>offset += pass.pmesh.size * 0.5</c>，随后 <c>pass = null</c>）：
+    /// mod 角色行的 render data 写 <c>@chara</c> → 实测 offset.y 0.94 = 0.30 + 0.64，正常；
+    /// 原版角色行写的是 <c>chara</c> → offset.y 0.30，没有这一跳，于是沉底。
+    /// 这里按同一套算法补上，数值全部取自该 RenderData 自己的 pass mesh，无硬编码。
+    /// <para>
+    /// 已经是 <c>@</c> 形态（<c>pass == null</c>，如 <c>custom_chara</c> / <c>chara_custom_*</c>）
+    /// 或 PC 的 <see cref="RenderDataPcc"/> 一律原样返回。
+    /// </para>
+    /// </summary>
+    internal static RenderData? ResolveCenterAnchoredRenderData(RenderData? race)
+    {
+        if (race is null || race is RenderDataPcc || race.pass is null || race.pass.pmesh is null) {
+            return race;
+        }
+
+        if (CenterAnchored.TryGetValue(race, out var cached) && cached is not null) {
+            return cached;
+        }
+
+        var pass = race.pass;
+        var clone = UnityEngine.Object.Instantiate(race);
+        clone.offset.x += pass.pmesh.size.x * 0.5f;
+        clone.offset.y += pass.pmesh.size.y * 0.5f;
+        clone.pass = null;
+        clone.name = race.name;   // 诊断日志里 data=chara 保持一致，便于逐角色对比
+
+        CenterAnchored[race] = clone;
+        return clone;
+    }
+
+    /// <summary>原种族 RenderData → 已补偿副本。按资产缓存，避免每次进屏都新建一个 ScriptableObject。</summary>
+    private static readonly Dictionary<RenderData, RenderData> CenterAnchored = new Dictionary<RenderData, RenderData>();
+
+    /// <summary>切图 / 新游戏：渲染器整体重建，补偿副本作废。</summary>
+    internal static void ClearCenterAnchoredCache()
+    {
+        CenterAnchored.Clear();
+        LyingActors.Clear();
+    }
+
+    /// <summary>被本类旋转成「躺姿」的 actor（InstanceID）——只有这些需要还原 localRotation。</summary>
+    private static readonly HashSet<int> LyingActors = new HashSet<int>();
+
+    /// <summary>
+    /// 躺姿相对<b>站立基准</b>的纵向偏移（世界单位）。负数 = 下沉，<c>-0.49</c> 即整图下移 0.49 格。
+    ///
+    /// 标定依据：相机 orthographicSize 2.7、屏高 1080 → 1080 / 2 / 2.7 = <b>200 px 每个世界单位</b>，
+    /// 所以 1920×1080 实机截图上「抬 10 像素」正好是 0.05 格。0.54 下沉时人还压在地板下，
+    /// 抬到 0.49 就是「半身躺在地面上」。
+    ///
+    /// 这是<b>整张中心 pivot 立绘</b>的落点，PC 与 NPC 共用。别再往它上面叠
+    /// subDead / subDeadPCC 的 offset.y（NPC 0.82 / 主角 0.06，互不相同，是给多部件 mesh 的）。
+    /// </summary>
+    private const float LyingDropY = -0.49f;
+
+    /// <summary>
+    /// 睡觉 / 死亡的「横躺」姿态。
+    ///
+    /// 原版让角色躺下只有一条路：<c>CardRenderer.Draw</c> 在 actor 渲染前把
+    /// <c>SubPassData.Current</c> 换成 <c>subDeadPCC</c>（主角）或 <c>subDead</c>（NPC）——
+    /// 实测两者都是 <b>Z 轴旋转 270°</b>，另带一份 offset（主角 (-0.3, 0.06)、NPC (0.2, 0.82)）。
+    /// 那份 offset 是给 PCC 多部件 mesh 调的；ACS 是整张中心 pivot 立绘，照搬的结果就是
+    /// 「横躺 + 往左挪 0.3 格 + 离地悬浮」，也就是玩家看到的浮在左边空中。
+    ///
+    /// 这里按<b>整图</b>重算落点。原版那两份 offset 是给 PCC 多部件 mesh 调的，整张中心 pivot
+    /// 立绘照搬只会得到「横躺 + 左挪 + 悬空」，所以<b>只取 rotation</b>（这才是「躺」），位置全部重算：
+    /// <list type="number">
+    /// <item>横向回到站立基准，不再跟 offset.x（主角 -0.3 会让整张图偏到左边一格）；</item>
+    /// <item>纵向按 <see cref="LyingDropY"/> 这条整图标定值下沉，PC / NPC 共用同一个落点；</item>
+    /// <item>NPC 原版从不写 localRotation，躺姿的旋转由这里补上。</item>
+    /// </list>
+    ///
+    /// <b>只能在 OnRender 之后调</b>：每帧原版都会重写 position，从它算基准才不会累积漂移。
+    /// 别挂到 RefreshSprite / NextDir 上 —— 那两条路径不重算 position，会重复减 offset。
+    /// </summary>
+    internal static void ApplyDeadOrSleepPose(Chara? owner, CardActor? actor)
+    {
+        if (owner is null || actor?.sr is null) {
+            return;
+        }
+
+        var tr = actor.transform;
+        if (tr is null) {
+            return;
+        }
+
+        int id = actor.GetInstanceID();
+        if (!owner.IsDeadOrSleeping) {
+            // 只还原被我们转过的 actor；原版对非 PCC 从不写 localRotation。
+            if (LyingActors.Remove(id)) {
+                tr.localRotation = Quaternion.identity;
+            }
+            return;
+        }
+
+        var pass = owner.IsPCC ? EClass.setting?.pass?.subDeadPCC : EClass.setting?.pass?.subDead;
+        if (pass is null || actor.sr.sprite is null) {
+            return;
+        }
+
+        // 原版已经把这帧的 SubPass offset 加进 position，先减回来得到站立基准
+        Vector3 stand = tr.position;
+        var cur = SubPassData.Current;
+        if (cur is not null && cur.enable) {
+            stand -= cur.offset;
+        }
+
+        tr.localRotation = pass.rotation;
+        LyingActors.Add(id);
+
+        // 位置只由站立基准 + 标定常数决定：横向回本格，纵向半身入地。
+        // 不叠加 pass.offset —— 那份数据是为 PCC 多部件 mesh 调的，对整图立绘无意义。
+        tr.position = new Vector3(stand.x, stand.y + LyingDropY, stand.z);
+    }
+
+    /// <summary>镜像 <c>CardActor.OnRender</c> 对 offset / offsetBack 的选择。</summary>
+    private static float OffsetY(RenderData data, int dir)
+    {
+        if (data.useOffsetBack) {
+            bool back = data.symmetry ? dir % 2 == 1 : dir == 1 || dir == 2;
+            if (back) {
+                return data.offsetBack.y;
+            }
+        }
+        return data.offset.y;
+    }
+
+    private static readonly Dictionary<int, float> LoggedDy = new Dictionary<int, float>();
+
+    /// <summary>诊断（仅 DiagnosticLog）：每个角色只在差值变化时打一行，实机即可看到两套原始数值。</summary>
+    private static void LogAlignment(Chara owner, float dy, float npcY, float pcY, RenderData pccData)
+    {
+        if (!AcsMod.DiagnosticLog) {
+            return;
+        }
+
+        int uid = owner.uid;
+        if (LoggedDy.TryGetValue(uid, out float last) && last == dy) {
+            return;
+        }
+        LoggedDy[uid] = dy;
+
+        var raceData = owner.source?.renderData;
+        var baseData = ResourceCache.Load<RenderData>(CharaBaseRenderDataPath);
+        var basePass = baseData?.pass;
+        AcsMod.Log($"[align] dy={dy:0.####} npcY={npcY:0.####} pcY={pcY:0.####} | "
+            + $"npcPrefY={owner.Pref?.y:0.####} race={raceData?.name} raceOffY={raceData?.offset.y:0.####} | "
+            + $"chara={baseData?.name} charaOffY={baseData?.offset.y:0.####} meshHalfY={(basePass is not null ? basePass.pmesh.size.y * 0.5f : 0f):0.####} | "
+            + $"pccPrefY={EClass.core?.refs?.prefs?.pcc?.y:0.####} pcc={pccData.name} pccOffY={pccData.offset.y:0.####}");
+    }
+    private static readonly Dictionary<string, string> ProbeLast = new Dictionary<string, string>();
+
+    /// <summary>
+    /// 诊断（仅 DiagnosticLog）：PC 与 NPC 都打一行同样的字段，用来对比同一张 ACS 图
+    /// 在两条路径上的<b>真实渲染姿态</b>（根节点位置/缩放、sr 子节点偏移、sprite pivot/世界高、
+    /// SubPass 偏移）。每个角色只在数值变化时打一行。
+    /// </summary>
+    internal static void ProbePose(string who, Chara owner, CardActor actor, float paramY)
+    {
+        if (!AcsMod.DiagnosticLog || owner is null || actor is null || actor.sr is null) {
+            return;
+        }
+
+        try {
+            var tr = actor.transform;
+            var srTr = actor.sr.transform;
+            var sp = actor.sr.sprite;
+            var cr = owner.renderer as CardRenderer;
+            var data = cr?.data;
+            var pref = cr?.GetPref();
+            var raceData = owner.sourceCard?.renderData;
+            var srcData = owner.source?.renderData;
+
+            string key = who + "|" + owner.uid;
+            string val = $"{tr.localScale.y:0.####}|{srTr.localPosition.y:0.####}"
+                + $"|{(sp is null ? -1f : sp.pivot.y):0.###}|{(sp is null ? 0f : sp.rect.height):0.#}"
+                + $"|{(sp is null ? 0f : sp.bounds.size.y):0.####}|{SubPassData.Current.offset.y:0.####}"
+                + $"|{pref?.y:0.####}|{data?.offset.y:0.####}|{data?.name}|{raceData?.offset.y:0.####}|{raceData?.name}"
+                + $"|{srcData?.offset.y:0.####}|{srcData?.name}";
+            if (ProbeLast.TryGetValue(key, out string? last) && last == val) {
+                return;
+            }
+            ProbeLast[key] = val;
+
+            AcsMod.Log($"[pose] {who} uid={owner.uid} type={actor.GetType().Name} pY={paramY:0.####}"
+                + $" rootY={tr.position.y:0.####} dY={tr.position.y - paramY:0.####} rootScaleY={tr.localScale.y:0.####}"
+                + $" srLocalY={srTr.localPosition.y:0.####} srScaleY={srTr.localScale.y:0.####}"
+                + $" prefY={pref?.y:0.####} data={data?.name} dataOffY={data?.offset.y:0.####}"
+                + $" raceData={raceData?.name} raceOffY={raceData?.offset.y:0.####}"
+                + $" srcData={srcData?.name} srcOffY={srcData?.offset.y:0.####}"
+                + $" sameRacePcc={(ReferenceEquals(raceData, data) ? 1 : 0)} subY={SubPassData.Current.offset.y:0.####}"
+                + $" pivotY={(sp is null ? -1f : sp.pivot.y):0.###} rectH={(sp is null ? 0f : sp.rect.height):0.#}"
+                + $" boundsY={(sp is null ? 0f : sp.bounds.size.y):0.####} ppu={(sp is null ? 0f : sp.pixelsPerUnit):0.#}"
+                + $" skin={owner.c_idSpriteReplacer}");
+        }
+        catch (Exception) {
+            // 诊断本身不许影响渲染
+        }
     }
 }
