@@ -14,7 +14,7 @@ public static class PlayState
     /// 基础状态总入口。判定分支顺序即优先级（由高到低）：
     /// revive > sleep > emote(仅非移动时) > hurt > combat_begin(进入战斗起手，一次性)
     /// > magic > melee > range
-    /// > cmove(combat 状态下移动) > combat > move > greet(NPC) > eat
+    /// > cmove(combat 状态下移动) > combat > eat > move > greet(NPC)
     /// > wet > drunk > confused > blind > idle。
     /// 此注释须与下方 if 分支逐条一致；调整优先级时先改分支再同步此处。
     /// </summary>
@@ -74,6 +74,13 @@ public static class PlayState
             return "combat";
         }
 
+        // 进食先于移动：宠物坐下开吃后，NPC 的走路粘滞（NpcMoveHysteresis）还会残留几帧，
+        // 排在 move 后面会让 eat 每次都被削掉开头，观感就是「根本没播」。
+        // IsEatActive 读的是食物身上那条动画，吃完立刻变 false，不会长期压住 move。
+        if (IsEatActive(chara)) {
+            return "eat";
+        }
+
         // 资源名 _acs_move；PC 用轴/寻路粘滞，NPC 只看格子插值 isMoving
         if (IsMoving(chara)) {
             return "move";
@@ -81,10 +88,6 @@ public static class PlayState
 
         if (!chara.IsPC && IsGreetActive(chara)) {
             return GetGreetState(chara);
-        }
-
-        if (IsEatActive(chara)) {
-            return "eat";
         }
 
         if (chara.isWet || chara.wasInWater) {
@@ -996,6 +999,9 @@ public static class PlayState
     /// </summary>
     private const string EatFlagKey = "acs_eat";
 
+    /// <summary>AnimeID.Eat 对应的 TransAnimeData（懒加载，只用于实例比对）。</summary>
+    private static TransAnimeData? EatAnimeData;
+
     /// <summary>
     /// 是否正在播放 eat 动画。
     ///
@@ -1024,7 +1030,44 @@ public static class PlayState
             return true;
         }
 
+        // 兜底：原版 AI_Eat 只对「食物」播 AnimeID.Eat，对角色本身不留任何痕迹；
+        // 而且进食窗口会被 IsMoving 挡在前面（见 GetState）。这里直接读食物身上那条
+        // 正在播放的进食动画，PC / NPC / 宠物共用同一判据。
+        if (IsFoodEatAnimePlaying(chara)) {
+            return true;
+        }
+
         return IsEatFlagActive(chara);
+    }
+
+    /// <summary>
+    /// 角色手上的食物正在播「吃」动画。
+    ///
+    /// 为什么需要：原版 <c>AI_Eat</c> 的 Progress_Custom 在 onProgress 里调的是
+    /// <c>target.PlayAnime(AnimeID.Eat)</c>（<b>食物</b>身上挂动画），角色自己没有任何标记；
+    /// 而宠物的进食窗口常常还叠着走路粘滞（IsMoving 排在 eat 前面），只靠 ai 类型判断会漏。
+    /// <c>TransAnime.Update</c> 播完非 loop 动画时会把 <c>renderer.anime</c> 置空，
+    /// 所以「吃完/被打断」后这里会立刻变 false，不需要自己收尾。
+    /// </summary>
+    private static bool IsFoodEatAnimePlaying(Chara chara)
+    {
+        Card? held = chara.held;
+        if (held is null || held.renderer is null) {
+            return false;
+        }
+
+        TransAnime? anime = held.renderer.anime;
+        if (anime?.data is null) {
+            return false;
+        }
+
+        // TransAnimeData 没有 id 字段（只有曲线/帧数），只能比资源实例：
+        // PlayAnime 每次都走 ResourceCache.Load，同一个 id 拿到的是同一个 ScriptableObject。
+        if (EatAnimeData is null) {
+            EatAnimeData = ResourceCache.Load<TransAnimeData>("Scene/Render/Anime/" + AnimeID.Eat);
+        }
+
+        return EatAnimeData is not null && ReferenceEquals(anime.data, EatAnimeData);
     }
 
     /// <summary>eat 手动标记（mapStr 时间戳，与 greet 同机制）。</summary>
