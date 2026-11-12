@@ -10,7 +10,7 @@ namespace ACS;
 ///
 /// 背景：原版 <c>EModding.ModConfig.RegisterAll</c> 只收录「有 ConfigEntry 的插件」
 /// （<c>plugin.Config.Count &gt; 0</c>）。BCS 之前把可调项全放在 ReflexCLI 控制台
-/// （<c>ACS.MoveHysteresis</c> / <c>ACS.PortraitLayout</c> / <c>ACS.SpriteCache</c>），
+/// （<c>ACS.MoveHysteresis</c> / <c>ACS.SpriteCache</c> / <c>ACS.HotReload</c>），
 /// 普通玩家根本不会知道它们存在。这里绑定 ConfigEntry 后，配置页会自动出现这些控件：
 /// bool → 开关、带范围的数字 → 滑杆，每行右侧自带「复位」按钮。
 ///
@@ -26,7 +26,6 @@ internal static class BcsConfig
     private const string SecRender = "渲染路径";
     private const string SecPcc = "主角贴图";
     private const string SecMove = "移动动画";
-    private const string SecPortrait = "对话立绘";
     private const string SecCache = "贴图缓存";
     private const string SecHot = "热重载";
     private const string SecDiag = "诊断";
@@ -35,17 +34,6 @@ internal static class BcsConfig
     private static ConfigEntry<bool>? _useLegacyPath;
     private static ConfigEntry<float>? _pcYAdjust;
     private static ConfigEntry<float>? _moveHysteresis;
-    private static ConfigEntry<bool>? _fullPortrait;
-    private static ConfigEntry<bool>? _subtitleMode;
-    private static ConfigEntry<float>? _subtitleHeight;
-    private static ConfigEntry<float>? _subtitleAlpha;
-    private static ConfigEntry<float>? _subtitleGradTop;
-    private static ConfigEntry<float>? _subtitleGradStart;
-    private static ConfigEntry<bool>? _subtitleDrag;
-    private static ConfigEntry<float>? _heightRatio;
-    private static ConfigEntry<float>? _offsetX;
-    private static ConfigEntry<float>? _offsetY;
-    private static ConfigEntry<bool>? _anchorRight;
     private static ConfigEntry<bool>? _cacheEnabled;
     private static ConfigEntry<float>? _cacheGrace;
     private static ConfigEntry<float>? _cacheMemory;
@@ -96,96 +84,6 @@ internal static class BcsConfig
                 "NPC 停下后仍按「移动中」处理的时长。调大 = 跟队更平滑，但停稳后会原地空走一段；"
                 + "调小 = 更灵敏，但走一步一停会让移动动画反复从第 0 帧重播。0.2 秒为实测甜点。",
                 new AcceptableValueRange<float>(0f, 2f)));
-
-        var fullPortrait = cfg.Bind(
-            SecPortrait,
-            "全身立绘兜底",
-            true,
-            new ConfigDescription(
-                "对话时显示 mod 提供的 -full 全身立绘（补原版缺的 enableFull / imageFull 配置）。"
-                + "关掉 = 完全走原版行为，可用于确认原版自己能不能显示。"));
-
-        var subtitleMode = cfg.Bind(
-            SecPortrait,
-            "透明对话框(字幕模式)",
-            false,
-            new ConfigDescription(
-                "把原版对话框改成屏幕底部的半透明字幕条：名字、正文、选项全部搬到条形衬底里，"
-                + "全身立绘不再被对话框挡住。**只改布局不改逻辑** —— 打字机、选项点击、数字快捷键、"
-                + "取消跳转全部照常。关掉（默认）= 完全走原版对话框。"
-                + "注意：原版每次说话都会重建对话布局，本项开启后每帧纠偏。"));
-        var subtitleHeight = cfg.Bind(
-            SecPortrait,
-            "字幕条高度(屏高比例)",
-            DialogSubtitleLayout.HeightRatio,
-            new ConfigDescription(
-                "底部半透明衬底的高度 = 屏幕高度 × 该比例。文字放不下就调大。",
-                new AcceptableValueRange<float>(0.08f, 0.6f)));
-
-        var subtitleAlpha = cfg.Bind(
-            SecPortrait,
-            "字幕条不透明度",
-            DialogSubtitleLayout.BackdropAlpha,
-            new ConfigDescription(
-                "衬底最底部（最黑处）的不透明度。0 = 全透明，1 = 纯黑。默认留一点保证文字可读。",
-                new AcceptableValueRange<float>(0f, 1f)));
-
-        var subtitleGradTop = cfg.Bind(
-            SecPortrait,
-            "字幕条顶部不透明度",
-            DialogSubtitleLayout.GradientTopAlpha,
-            new ConfigDescription(
-                "衬底顶边的不透明度，用来做向上渐隐。0 = 顶边完全透明（默认，过渡自然），"
-                + "1 = 整条实心（等于没有渐变）。",
-                new AcceptableValueRange<float>(0f, 1f)));
-
-        var subtitleGradStart = cfg.Bind(
-            SecPortrait,
-            "字幕条渐变起点",
-            DialogSubtitleLayout.GradientStart,
-            new ConfigDescription(
-                "从衬底顶边往下多少比例开始渐入。0 = 从最顶就开始（默认），0.35 = 上面 35% 全透明、"
-                + "下面 65% 渐入到最黑。调大 = 透明区更高。",
-                new AcceptableValueRange<float>(0f, 0.9f)));
-
-        var subtitleDrag = cfg.Bind(
-            SecPortrait,
-            "字幕布局调整(可直接拖动)",
-            false,
-            new ConfigDescription(
-                "打开后，字幕条上的「选项块」和「好感块」可以直接用鼠标拖着摆位置，"
-                + "拖动结果会记下来（换分辨率也不丢，存的是相对默认位置的偏移）。"
-                + "**默认关闭 —— 不调整布局时请保持关闭**，否则这两块会吃掉射线检测。"
-                + "命令 ACS.Subtitle drag 可临时开关，ACS.Subtitle resetlayout 复位。"));
-
-        var heightRatio = cfg.Bind(            SecPortrait,
-            "立绘高度(屏高比例)",
-            FullPortraitPatch.DefaultHeightRatio,
-            new ConfigDescription(
-                "全身立绘高度 = 屏幕高度 × 该比例。改完重新打开对话生效。",
-                new AcceptableValueRange<float>(0.1f, 2f)));
-
-        var offsetX = cfg.Bind(
-            SecPortrait,
-            "立绘水平偏移(像素)",
-            FullPortraitPatch.DefaultOffsetX,
-            new ConfigDescription(
-                "距离屏幕左边缘（勾选右下角对齐时为右边缘）的像素距离。",
-                new AcceptableValueRange<float>(-2000f, 2000f)));
-
-        var offsetY = cfg.Bind(
-            SecPortrait,
-            "立绘垂直偏移(像素)",
-            FullPortraitPatch.DefaultOffsetY,
-            new ConfigDescription(
-                "距屏幕底边。负值 = 沉到屏幕外，正值 = 抬起。",
-                new AcceptableValueRange<float>(-2000f, 2000f)));
-
-        var anchorRight = cfg.Bind(
-            SecPortrait,
-            "立绘右下角对齐",
-            false,
-            new ConfigDescription("勾选 = 贴屏幕右下角；不勾 = 贴左下角（默认）。改完重新打开对话生效。"));
 
         var cacheEnabled = cfg.Bind(
             SecCache,
@@ -247,7 +145,9 @@ internal static class BcsConfig
             SecPrewarm,
             "预热底图",
             true,
-            new ConfigDescription("NPC 的默认立绘（<id>.png）。关掉 = 首次见到该 NPC 时现解一次。"));
+            new ConfigDescription("NPC 的默认立绘（<id>.png）。关掉 = 首次见到该 NPC 时现解一次。"
+                + "注意：本组各项只决定「哪些状态预热」，**任何 ≥2MB 的贴图不论勾选与否都会预热**"
+                + "（大图解码最贵，漏一次就是进视野时的一次卡顿）。"));
 
         var warmIdle = cfg.Bind(
             SecPrewarm,
@@ -314,17 +214,6 @@ internal static class BcsConfig
         Watch(useLegacyPath);
         Watch(pcYAdjust);
         Watch(moveHysteresis);
-        Watch(fullPortrait);
-        Watch(subtitleMode);
-        Watch(subtitleHeight);
-        Watch(subtitleAlpha);
-        Watch(subtitleGradTop);
-        Watch(subtitleGradStart);
-        Watch(subtitleDrag);
-        Watch(heightRatio);
-        Watch(offsetX);
-        Watch(offsetY);
-        Watch(anchorRight);
         Watch(cacheEnabled);
         Watch(cacheGrace);
         Watch(cacheMemory);
@@ -345,17 +234,6 @@ internal static class BcsConfig
         _useLegacyPath = useLegacyPath;
         _pcYAdjust = pcYAdjust;
         _moveHysteresis = moveHysteresis;
-        _fullPortrait = fullPortrait;
-        _subtitleMode = subtitleMode;
-        _subtitleHeight = subtitleHeight;
-        _subtitleAlpha = subtitleAlpha;
-        _subtitleGradTop = subtitleGradTop;
-        _subtitleGradStart = subtitleGradStart;
-        _subtitleDrag = subtitleDrag;
-        _heightRatio = heightRatio;
-        _offsetX = offsetX;
-        _offsetY = offsetY;
-        _anchorRight = anchorRight;
         _cacheEnabled = cacheEnabled;
         _cacheGrace = cacheGrace;
         _cacheMemory = cacheMemory;
@@ -389,18 +267,6 @@ internal static class BcsConfig
 
         PlayState.NpcMoveHysteresis = _moveHysteresis?.Value ?? PlayState.DefaultNpcMoveHysteresis;
         AcsSpritePresenter.PcYAdjust = _pcYAdjust?.Value ?? 0f;
-        FullPortraitPatch.Enabled = _fullPortrait?.Value ?? true;
-        DialogSubtitleLayout.SetEnabled((_subtitleMode?.Value ?? false)
-            || (_subtitleDrag?.Value ?? false));
-        DialogSubtitleLayout.SetEditMode(_subtitleDrag?.Value ?? false);
-        DialogSubtitleLayout.HeightRatio = _subtitleHeight?.Value ?? 0.22f;
-        DialogSubtitleLayout.BackdropAlpha = _subtitleAlpha?.Value ?? 0.62f;
-        DialogSubtitleLayout.GradientTopAlpha = _subtitleGradTop?.Value ?? 0f;
-        DialogSubtitleLayout.GradientStart = _subtitleGradStart?.Value ?? 0f;
-        FullPortraitPatch.HeightRatio = _heightRatio?.Value ?? FullPortraitPatch.DefaultHeightRatio;
-        FullPortraitPatch.OffsetX = _offsetX?.Value ?? FullPortraitPatch.DefaultOffsetX;
-        FullPortraitPatch.OffsetY = _offsetY?.Value ?? FullPortraitPatch.DefaultOffsetY;
-        FullPortraitPatch.AnchorRight = _anchorRight?.Value ?? false;
         SpriteCacheEvict.Enabled = _cacheEnabled?.Value ?? true;
         SpriteCacheEvict.GraceSeconds = _cacheGrace?.Value ?? SpriteCacheEvict.DefaultGraceSeconds;
         SpriteCacheEvict.MemoryBudgetMb = (int)(_cacheMemory?.Value ?? SpriteCacheEvict.DefaultMemoryBudgetMb);
@@ -417,8 +283,6 @@ internal static class BcsConfig
         GreetPrewarm.WarmEat = _warmEat?.Value ?? false;
         GreetPrewarm.WarmCmove = _warmCmove?.Value ?? false;
         SkinHotReload.Enabled = _hotReload?.Value ?? false;
-
-        // 字幕模式的位置每帧现算，参数改动下一帧自然生效，不需要额外刷新。
 
         // 监视器是真资源（FileSystemWatcher 句柄），跟着开关启停；放在 Apply 末尾保证字段都就位。
         SkinHotReload.Sync();
@@ -441,62 +305,6 @@ internal static class BcsConfig
     // ---------------- 写入口（控制台命令用；GUI 直接改 ConfigEntry） ----------------
 
     internal static void SetMoveHysteresis(float sec) => Set(_moveHysteresis, sec);
-
-
-    internal static void SetFullPortrait(bool on) => Set(_fullPortrait, on);
-
-    internal static void SetSubtitleMode(bool on) => Set(_subtitleMode, on);
-
-    internal static void SetSubtitleHeight(float ratio) => Set(_subtitleHeight, ratio);
-
-    internal static void SetSubtitleAlpha(float alpha) => Set(_subtitleAlpha, alpha);
-
-    internal static void SetSubtitleGradTop(float a) => Set(_subtitleGradTop, a);
-
-    internal static void SetSubtitleGradStart(float r) => Set(_subtitleGradStart, r);
-
-    /// <summary>切「布局调整」（<c>ACS.Subtitle drag</c>）。</summary>
-    internal static void SetSubtitleDrag(bool on) => Set(_subtitleDrag, on);
-
-    /// <summary>
-    /// 一次性套用一套字幕参数（含打开字幕模式）。
-    /// 单独走 <see cref="Set"/> 会写四次配置文件并触发四轮 Apply；这里合并成「改完 → 存一次 → Apply 一次」。
-    /// </summary>
-    internal static void SetSubtitlePreset(float height, float alpha, float gradTop, float gradStart)
-    {
-        ConfigFile? file = null;
-        bool dirty = Assign(_subtitleMode, true, ref file);
-        dirty |= Assign(_subtitleHeight, height, ref file);
-        dirty |= Assign(_subtitleAlpha, alpha, ref file);
-        dirty |= Assign(_subtitleGradTop, gradTop, ref file);
-        dirty |= Assign(_subtitleGradStart, gradStart, ref file);
-
-        if (dirty && file is not null && !file.SaveOnConfigSet) {
-            file.Save();
-        }
-
-        // 值没变时 BepInEx 不会触发 SettingChanged，统一兜一次；幂等。
-        Apply();
-    }
-
-    private static bool Assign<T>(ConfigEntry<T>? entry, T value, ref ConfigFile? file)
-    {
-        if (entry is null || Equals(entry.Value, value)) {
-            return entry is not null;
-        }
-
-        entry.Value = value;
-        file = entry.ConfigFile;
-        return true;
-    }
-
-    internal static void SetHeightRatio(float ratio) => Set(_heightRatio, ratio);
-
-    internal static void SetOffsetX(float px) => Set(_offsetX, px);
-
-    internal static void SetOffsetY(float px) => Set(_offsetY, px);
-
-    internal static void SetAnchorRight(bool right) => Set(_anchorRight, right);
 
     internal static void SetCacheEnabled(bool on) => Set(_cacheEnabled, on);
 

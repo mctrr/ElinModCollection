@@ -33,8 +33,7 @@ namespace ACS.Patches;
 ///      —— 覆盖「在图上但出屏」的角色，以及皮肤写在角色行上的 NPC；
 ///   B. 宽限期内被 <see cref="Touch"/> 过的 <c>SpriteData</c> —— 覆盖正在渲染的角色与换肤列表图标。
 ///
-/// 不在这里管的：立绘（<c>PortraitAnimator</c> / <c>FullPortraitPatch</c> 走 Portrait 目录）、
-/// 道具动画（<c>SpriteReplacerAnimation.dict</c> 是另一张静态表）。
+/// 不在这里管的：道具动画（<c>SpriteReplacerAnimation.dict</c> 是另一张静态表）。
 /// </summary>
 internal static class SpriteCacheEvict
 {

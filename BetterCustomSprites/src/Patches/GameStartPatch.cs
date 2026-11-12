@@ -56,6 +56,5 @@ internal class GameStartPatch
     internal static void OnSceneUpdate()
     {
         PcSkinBinder.TickRetry();
-        PortraitAnimator.Tick();
     }
 }

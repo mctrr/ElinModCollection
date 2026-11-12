@@ -89,37 +89,6 @@ internal class AcsMod : BaseUnityPlugin
 
         // Package Chainloader 在 ModManager init 之后才加载；持续扫约 10s 覆盖延迟加载。
         StartCoroutine(WatchConflict());
-
-        // 配置页自制控件要在 ModManager 给 dysmod 分好 package 之后才能挂上去，一并交给协程重试。
-        StartCoroutine(WatchConfigUi());
-    }
-
-    /// <summary>
-    /// 等 ModManager 就绪后把自制控件挂进原版配置页。
-    /// 原版 <c>RegisterAll</c> 的时机在 ModManager init 之后、具体时刻不保证，
-    /// 所以用低频轮询而不是一次性尝试。
-    /// </summary>
-    private static IEnumerator WatchConfigUi()
-    {
-        // 与 WatchConflict 同款节奏：0.5s 一轮，约 10s 窗口。
-        for (int i = 0; i < 20; i++) {
-            try {
-                if (BcsConfigUi.TryRegister()) {
-                    yield break;
-                }
-            }
-            catch (Exception ex) {
-                // 单次失败不该中止后续尝试，但也不该每帧刷日志。
-                Warn("[ConfigUI] register attempt #" + i + " threw: " + ex.Message);
-                BcsConfigUi.GiveUp();
-                yield break;
-            }
-
-            yield return new WaitForSecondsRealtime(0.5f);
-        }
-
-        // 十秒都没成功 = 这一局大概率版本不支持（或本 mod 不是以 Package 方式加载）。
-        BcsConfigUi.GiveUp();
     }
 
     /// <summary>
