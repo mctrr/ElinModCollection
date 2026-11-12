@@ -170,7 +170,10 @@ internal class PcSkinPatch
         }
 
         // 只绑 spriteReplacer，保留 pccData / PCC actor；ACS 或静态图由 PccRenderPatch 叠
-        owner.spriteReplacer = skin;
+        // 23.359.0 sprite_override: keep the override replacer instance intact.
+        if (!SkinIndex.IsOverrideReplacer(owner, owner.spriteReplacer)) {
+            owner.spriteReplacer = skin;
+        }
     }
 
     /// <summary>
@@ -208,7 +211,10 @@ internal class PcSkinPatch
             return;
         }
 
-        owner.spriteReplacer = skin;
+        // 23.359.0 sprite_override: keep the override replacer instance intact.
+        if (!SkinIndex.IsOverrideReplacer(owner, owner.spriteReplacer)) {
+            owner.spriteReplacer = skin;
+        }
         var race = owner.sourceCard?.renderData ?? owner.source?.renderData;
         if (race is null) {
             return;

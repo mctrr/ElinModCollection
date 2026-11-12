@@ -8,9 +8,9 @@ using HarmonyLib;
 using ReflexCLI;
 using UnityEngine;
 
-[assembly: AssemblyVersion("2.5.0.0")]
-[assembly: AssemblyFileVersion("2.5.0.0")]
-[assembly: AssemblyInformationalVersion("2.5.0")]
+[assembly: AssemblyVersion("2.6.0.0")]
+[assembly: AssemblyFileVersion("2.6.0.0")]
+[assembly: AssemblyInformationalVersion("2.6.0")]
 [assembly: AssemblyProduct(ACS.ModInfo.Guid)]
 [assembly: AssemblyTitle(ACS.ModInfo.Name)]
 [assembly: AssemblyMetadata("Repo", "https://github.com/mctrr/BetterCustomSprites")]
@@ -21,7 +21,7 @@ internal static class ModInfo
 {
     internal const string Guid = "mctrr.bettercustomsprites";
     internal const string Name = "Better Custom Sprites";
-    internal const string Version = "2.5.0";
+    internal const string Version = "2.6.0";
 
     // ---- 已知会抢动画链路的冲突 mod ----
 
@@ -57,7 +57,24 @@ internal class AcsMod : BaseUnityPlugin
         TryReportConflict("Awake");
 
         var harmony = new Harmony(ModInfo.Guid);
-        harmony.PatchAll();
+        // Harmony.PatchAll(Assembly) 内部是纯 foreach，任何一个补丁类抛异常都会中途停下：
+        // 前面的补丁已生效、后面的全部静默丢失，Awake 余下初始化也不执行（mod 半启动，
+        // 表现是「换肤没反应 / 状态动画消失 / ACS.* 命令不见」，最难查的一种）。
+        // 逐类隔离 + 报出类名，让失败可见、可控，其余补丁照常生效。
+        int failed = 0;
+        foreach (var patchType in AccessTools.GetTypesFromAssembly(Assembly.GetExecutingAssembly())) {
+            try {
+                harmony.CreateClassProcessor(patchType).Patch();
+            }
+            catch (Exception ex) {
+                failed++;
+                Error("[BCS] patch class failed: " + patchType.FullName + " :: " + ex);
+            }
+        }
+
+        if (failed > 0) {
+            Error("[BCS] " + failed + " patch class(es) failed; see the errors above.");
+        }
 
         CommandRegistry.assemblies.Add(Assembly.GetExecutingAssembly());
 
