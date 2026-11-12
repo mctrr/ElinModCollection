@@ -23,6 +23,7 @@ internal static class BcsConfig
 {
     // 分组标题。ModConfig 用 Definition.Section 分组，顺序 = 下面 Bind 的先后顺序。
     // 标题与键名都直接进配置页（走 Lang.Get，缺语言键时原样返回），所以这里写中文。
+    private const string SecRender = "渲染路径";
     private const string SecPcc = "主角贴图";
     private const string SecMove = "移动动画";
     private const string SecPortrait = "对话立绘";
@@ -31,6 +32,7 @@ internal static class BcsConfig
     private const string SecDiag = "诊断";
     private const string SecPrewarm = "场景预热";
 
+    private static ConfigEntry<bool>? _useLegacyPath;
     private static ConfigEntry<float>? _pcYAdjust;
     private static ConfigEntry<float>? _moveHysteresis;
     private static ConfigEntry<bool>? _fullPortrait;
@@ -64,6 +66,19 @@ internal static class BcsConfig
     /// <summary>绑定设置项。在 <see cref="AcsMod.Awake"/> 里调用一次。</summary>
     internal static void Init(ConfigFile cfg)
     {
+        // 放在第一个绑定 = 配置页最上面一行。出问题时玩家一眼能找到这个开关。
+        var useLegacyPath = cfg.Bind(
+            SecRender,
+            "使用稳定版渲染路径",
+            false,
+            new ConfigDescription(
+                "默认关（夜间版）：游戏 23.359.0 及以上用本体新的 SpriteData 接口绘制，"
+                + "由本体统一切贴图与推进帧。"
+                + "勾上 = 退回 2.5.0 的旧渲染路径（自建 IL 注入 + 自建帧推进），"
+                + "只在新版路径在你的机器上出问题时才需要。"
+                + "游戏低于 23.359.0 时本项不生效，会自动使用旧路径。"
+                + "**改完需要重开游戏才生效（补丁在启动时注册）。**"));
+
         var pcYAdjust = cfg.Bind(
             SecPcc,
             "垂直微调",
@@ -296,6 +311,7 @@ internal static class BcsConfig
             new ConfigDescription("战斗中的移动动画。默认关。"));
 
         // 全部绑定完再挂事件，避免绑定过程中触发一遍 Apply。
+        Watch(useLegacyPath);
         Watch(pcYAdjust);
         Watch(moveHysteresis);
         Watch(fullPortrait);
@@ -326,6 +342,7 @@ internal static class BcsConfig
         Watch(warmEat);
         Watch(warmCmove);
 
+        _useLegacyPath = useLegacyPath;
         _pcYAdjust = pcYAdjust;
         _moveHysteresis = moveHysteresis;
         _fullPortrait = fullPortrait;
@@ -366,6 +383,10 @@ internal static class BcsConfig
     /// </summary>
     internal static void Apply()
     {
+        // 渲染路径只在启动时读一次（补丁类注册后就换不了了），这里只更新镜像；
+        // 玩家改完配置页要重开游戏才生效 —— 配置项说明里已写明。
+        RenderPath.ForceLegacy = _useLegacyPath?.Value ?? false;
+
         PlayState.NpcMoveHysteresis = _moveHysteresis?.Value ?? PlayState.DefaultNpcMoveHysteresis;
         AcsSpritePresenter.PcYAdjust = _pcYAdjust?.Value ?? 0f;
         FullPortraitPatch.Enabled = _fullPortrait?.Value ?? true;

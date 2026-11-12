@@ -18,7 +18,7 @@ internal static class SpriteDataInvalidation
 {
     /// <summary>旧本体没有这些字段，整类不注册（含下面的 ReloadSprite 前缀）。</summary>
     [HarmonyPrepare]
-    internal static bool Prepare() => ApiProbe.HasSpriteDataApi;
+    internal static bool Prepare() => RenderPath.UseSpriteData;
 
     /// <summary>让在场角色的 actor 下一帧重新问一次 GetSpriteData（热重载用）。主线程调用。</summary>
     internal static void InvalidateOnScreenActors()

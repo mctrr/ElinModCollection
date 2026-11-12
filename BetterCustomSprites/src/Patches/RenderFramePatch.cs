@@ -25,7 +25,7 @@ internal class RenderFramePatch
     /// ClearRuntimeCaches 仍可被外部安全调用（方法体不碰新字段）。
     /// </summary>
     [HarmonyPrepare]
-    internal static bool Prepare() => ApiProbe.HasSpriteDataApi;
+    internal static bool Prepare() => RenderPath.UseSpriteData;
 
     // ---- OnRender 作用域（Unity 主线程，单字段够用）----
     private static CardActor? _scopeActor;

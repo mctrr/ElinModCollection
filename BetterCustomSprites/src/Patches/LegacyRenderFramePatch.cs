@@ -33,7 +33,7 @@ internal class LegacyRenderFramePatch
     /// <c>ClearRuntimeCaches</c> 不受影响：它不是补丁方法，方法体也不碰新 API。
     /// </summary>
     [HarmonyPrepare]
-    internal static bool Prepare() => !ApiProbe.HasSpriteDataApi;
+    internal static bool Prepare() => !RenderPath.UseSpriteData;
     /// <summary>
     /// 缓存 private 字段访问器。
     /// 若每次 AccessTools.FieldRefAccess 都会反射查找，greet 结束检测会变慢。

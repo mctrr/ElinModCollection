@@ -56,14 +56,14 @@ internal class AcsMod : BaseUnityPlugin
         // 立即扫一轮（BepInEx plugins）。Package 里的 mod 加载较晚，后面再 watch 一会。
         TryReportConflict("Awake");
 
-        // 两套渲染路径按本体能力二选一，补丁类各自用 HarmonyPrepare 门控：
-        //   23.359.0+ → RenderFramePatch（本体回答 GetSpriteData 并推进帧）
-        //   < 23.359.0 → LegacyRenderFramePatch（原 2.5.0 的 IL 注入 + 自建帧推进）
-        // 门禁必须在注册前定死：旧本体上碰新 API 字段会在 JIT 抛 MissingFieldException，
-        // 抛点正好落在读档 / OnEnterScreen 路径上，玩家看到的是「进不去存档」。
-        Log(ApiProbe.HasSpriteDataApi
-            ? "[BCS] 本体 23.359.0+：使用 SpriteData 路径。"
-            : "[BCS] 本体 < 23.359.0：使用兼容路径（旧版 IL 注入）。");
+        // 两套渲染路径二选一，补丁类各自用 HarmonyPrepare 门控：
+        //   夜间版 → RenderFramePatch（本体回答 GetSpriteData 并推进帧）
+        //   稳定版 → LegacyRenderFramePatch（原 2.5.0 的 IL 注入 + 自建帧推进）
+        // 判定 = 本体有没有 23.359.0 的 API + 配置页开关；两者都编在同一个 DLL 里，
+        // 玩家在配置页「渲染路径 → 使用稳定版渲染路径」切换。门禁必须在注册前定死：
+        // 旧本体上碰新 API 字段会在 JIT 抛 MissingFieldException，抛点正好落在
+        // 读档 / OnEnterScreen 路径上，玩家看到的是「进不去存档」。
+        Log(RenderPath.Describe());
 
         var harmony = new Harmony(ModInfo.Guid);
         // Harmony.PatchAll(Assembly) 内部是纯 foreach，任何一个补丁类抛异常都会中途停下：
