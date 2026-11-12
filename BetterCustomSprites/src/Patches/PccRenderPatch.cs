@@ -16,19 +16,13 @@ namespace ACS.Patches;
 [HarmonyPatch]
 internal class PccRenderPatch
 {
-    private static readonly AccessTools.FieldRef<CardActor, float> SpriteTimerRef =
-        AccessTools.FieldRefAccess<CardActor, float>("spriteTimer");
-
-    private static readonly AccessTools.FieldRef<CardActor, int> SpriteIndexRef =
-        AccessTools.FieldRefAccess<CardActor, int>("spriteIndex");
-
     // 临时把 temp 设为 -1，跳过原版 OnRender 的主/副手绘制（含战斗武器 tile）
     private static int _savedTempLeft;
     private static int _savedTempRight;
     private static bool _tempsSaved;
 
     // 按 actor 分状态推进帧，避免多 PCC 共享 _sharedTimer 串帧
-    // 逐帧推进状态机（原 FrameState）已抽到共享的 ClipClock.State（见 ClipClock.cs），
+    // 逐帧推进状态机在 ClipClock.State（见 ClipClock.cs），23.359.0 起只服务 PC 路径；
     // 这里只留“actor.InstanceID → 状态”的字典，键与清理入口 ClearRuntimeCaches 不变。
     private static readonly Dictionary<int, ClipClock.State> FrameByActor = new Dictionary<int, ClipClock.State>();
 
@@ -115,8 +109,8 @@ internal class PccRenderPatch
             AdvanceFrame(__instance, data, owner);
         }
         else {
-            SpriteTimerRef(__instance) = 0f;
-            SpriteIndexRef(__instance) = 0;
+            __instance.spriteTimer = 0f;
+            __instance.spriteIndex = 0;
             // 单帧 revive / greet 也要清一次性标记，否则会粘死
             PlayState.StopOneShotIfLastFrame(owner, data.frame, 0);
         }
@@ -217,11 +211,10 @@ internal class PccRenderPatch
             FrameByActor[actorKey] = st;
         }
 
-        // 同帧去重 + sig/clip 变化重播 + timer 累进 + 帧钳制与 NPC 端 AdvanceAndApply
-        // 共用同一套 ClipClock.State.StepFrame，避免两条路径各自维护导致行为漂移。
+        // 同帧去重 + sig/clip 变化重播 + timer 累进 + 帧钳制，由 ClipClock.State.StepFrame 负责。
         int index = st.StepFrame(owner, data);
-        SpriteTimerRef(__instance) = st.Timer;
-        SpriteIndexRef(__instance) = index;
+        __instance.spriteTimer = st.Timer;
+        __instance.spriteIndex = index;
     }
 
     /// <summary>
@@ -263,7 +256,7 @@ internal class PccRenderPatch
                 }
             }
 
-            int idx = SpriteIndexRef(__instance);
+            int idx = __instance.spriteIndex;
             if (idx < 0 || idx >= sprites.Length) {
                 idx = 0;
             }

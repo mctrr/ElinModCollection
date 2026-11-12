@@ -252,6 +252,10 @@ internal static class SkinHotReload
                 }
             }
 
+            // 23.359.0：贴图作废后令在场 actor 重新问 GetSpriteData，
+            // 否则 sd == spriteData 时本体不会触发 ReloadSprite，单帧皮肤一直显示旧图。
+            SpriteDataInvalidation.InvalidateOnScreenActors();
+
             _reloadCount++;
             AcsMod.Log("[BCS] 热加载：检测到 " + pending.Length + " 个 PNG 变更，作废 " + hit + " 张贴图"
                 + (tiles > 0 ? "（含 " + tiles + " 个分片）" : string.Empty)

@@ -3,23 +3,17 @@ using UnityEngine;
 
 namespace ACS.Frame;
 
-using ACS.API;
-
 /// <summary>
-/// NPC（<see cref="RenderFramePatch"/>）与 PC（<see cref="PccRenderPatch"/>）两条渲染路径
-/// 镜像重复的“每帧推进动画”状态机，合并到 <see cref="ClipClock.State"/> 这一份实现里。
-/// 以后修动画 bug（同帧去重 / sig·clip 变化重播 / timer 累进 / 帧钳制）只需改这里一处，
-/// 不用在两端各改一遍。
-/// 历史 bug 根因的中文注释随逻辑从两个原文件（NpcFrameState / FrameState）原样保留。
+/// PC（<c>PccRenderPatch</c>）路径专用的逐帧播放状态机。
+/// 23.359.0 起 NPC 的帧推进由原版 <c>CardActor.OnRender</c> 负责，这里只服务 PCC。
+/// 历史 bug 根因的中文注释随逻辑从旧的 FrameState 保留。
 /// </summary>
 internal static class ClipClock
 {
     /// <summary>
-    /// 单角色逐帧播放状态（替代 RenderFramePatch.NpcFrameState 与 PccRenderPatch.FrameState）。
-    /// 键为 actor.GetInstanceID()，由两端各自的字典按 actor 持有，清理入口（ClearRuntimeCaches）不变。
-    /// 语义与旧两套一致，字段一一对应：
-    /// 旧 NpcFrameState.LastFrame 与 FrameState.LastAdvanceFrame 都记录“上次推进的 Time.frameCount”，
-    /// 统一为这里的 <see cref="LastAdvanceFrame"/>。
+    /// 单角色逐帧播放状态（替代旧 PccRenderPatch.FrameState）。
+    /// 键为 actor.GetInstanceID()，由 PccRenderPatch 的字典按 actor 持有，清理入口不变。
+    /// 语义与旧实现一致：LastAdvanceFrame 记录“上次推进的 Time.frameCount”。
     /// </summary>
     internal sealed class State
     {
@@ -44,8 +38,7 @@ internal static class ClipClock
         /// <see cref="LastSig"/> 不同；或（b）clip 对象引用变化——时，更新 LastSig/LastClip，
         /// 并把本状态 <see cref="Timer"/> / <see cref="Index"/> 清零，返回 true。
         /// 注意：本方法不动 <see cref="LastAdvanceFrame"/>，也不清调用方 actor 的
-        /// spriteIndex/spriteTimer——NPC 的 GetCurrentAnimatedData 需要顺带把原版字段归零，
-        /// 由各调用点按需处理。语义与旧两端代码一致。
+        /// spriteIndex/spriteTimer，由调用点按需写回。语义与旧代码一致。
         /// </summary>
         public bool RestartIfChanged(Chara chara, SpriteData data)
         {
@@ -73,8 +66,8 @@ internal static class ClipClock
         /// <summary>
         /// 每帧推进一步：同帧去重（<see cref="LastAdvanceFrame"/> == Time.frameCount 则整段跳过）
         /// → sig/clip 变化走 <see cref="RestartIfChanged"/> 重播，否则 timer += delta 累进、
-        /// 越 time 调 AdvanceClipIndex 换帧；末尾做帧数钳制。返回推进后的 index。
-        /// 推进后需要写回 actor 的 spriteTimer/spriteIndex 的调用点读本状态字段即可。
+        /// 越 time 调 AdvanceClipIndex 换帧；末尾做帧数钳制。
+        /// 返回推进后的 index，由调用点写回 actor.spriteTimer/spriteIndex。
         /// </summary>
         public int StepFrame(Chara chara, SpriteData data)
         {
@@ -83,9 +76,7 @@ internal static class ClipClock
                 LastAdvanceFrame = fc;
                 if (!RestartIfChanged(chara, data)) {
                     // 动作与 clip 都没变：正常计时推进。用独立副本而不直接依赖
-                    // actor.spriteTimer/spriteIndex：换肤角色 vanillaTouched=true 时原版与
-                    // Postfix 同帧各推一次会双倍速，这里仅记录我们这一路的推进，
-                    // 配合调用点的 allowAdvance 避免叠加。
+                    // actor.spriteTimer/spriteIndex，保证同一渲染帧只推进一次。
                     Timer += Core.delta;
                     if (Timer >= data.time && data.time > 0f) {
                         Timer -= data.time;
