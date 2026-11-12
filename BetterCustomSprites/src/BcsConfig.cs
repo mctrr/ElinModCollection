@@ -127,9 +127,11 @@ internal static class BcsConfig
             "皮肤热加载",
             false,
             new ConfigDescription(
-                "监视贴图目录，在游戏外（Aseprite / 资源管理器 / 导出脚本）改完 PNG 后，"
-                + "游戏内会自动重新读盘解码，角色下次进画面就生效。改完有 1.5 秒防抖，"
-                + "等导出工具把文件写完再动手。只处理「改已有图」；新增/删除/改名要敲 ACS.ReloadAcs。"));
+                "监视各包的 Texture 与 Skin 目录，在游戏外（Aseprite / 资源管理器 / 导出脚本）"
+                + "改完 PNG、.ini 或 .pref 后，游戏内会自动重新读盘，角色下次进画面就生效。"
+                + "改完有 1.5 秒防抖，等导出工具把文件写完再动手。只处理「改已有文件」；"
+                + "新增/删除/改名要敲 ACS.ReloadAcs。"
+                + "注意：原版切回游戏时只刷新原版贴图，不刷新自定义皮肤 —— 本项是皮肤热更新的唯一通道。"));
 
         var diagnosticLog = cfg.Bind(
             SecDiag,

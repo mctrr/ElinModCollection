@@ -160,8 +160,19 @@ baseSkinId=foreignSkinId
 
 ### 皮肤热加载（默认关）
 
-`FileSystemWatcher` 监视贴图目录，游戏外（Aseprite / 导出脚本）改完 PNG 后**防抖 1.5s**自动作废重载，
-角色下次进画面时才重解码。只处理「改已有图」；新增 / 删除 / 改名要敲 `ACS.ReloadAcs`。
+`FileSystemWatcher` 监视各包的 **Texture 与 Skin** 目录（`Custom/` 与 `Package/*/` 都算），
+游戏外（Aseprite / 导出脚本）改完 **PNG / `.ini` / `.pref`** 后 **防抖 1.5s** 自动失效重载，
+角色下次进画面时才重解码：
+
+- 改 PNG → 丢掉 `tex`/`sprites`，重新读盘；
+- 改 `.ini` → 重读帧数 / 间隔 / `scale`，只有帧数或 `scale` 变了才重解码（改 `time` 不动贴图）；
+- 改 `.pref` → 重读密度，只有 `scaleTex` 变了才重建 sprite。
+
+只处理「改已有文件」；新增 / 删除 / 改名要敲 `ACS.ReloadAcs`。
+
+> 原版切回游戏时会刷新 `TextureData`、原版卡图（`RenderRow.replacer`）和 `sprite_override`
+> （`dictOverrides`），但对 `SpriteReplacer.dictSkins` 只重读 ini/pref、**不重读 PNG** ——
+> 所以自定义皮肤（动态底图与 `_acs_*` 状态片）的热更新只能靠这一项。
 
 ### 超宽横条分片
 
