@@ -151,9 +151,8 @@ internal static class PcSkinCommands
                         cr.RefreshSprite();
                         // 23.359.0：清贴图后必须让 actor 下一帧重新问 GetSpriteData，
                         // 否则 sd == spriteData 时本体不会切图，单帧皮肤一直显示旧图。
-                        if (cr.actor is not null) {
-                            cr.actor.spriteData = null;
-                        }
+                        // 旧本体没有 spriteData：走带版本门禁的 helper，避免 JIT 崩溃。
+                        SpriteDataInvalidation.ClearSpriteData(cr.actor);
                         refreshed++;
                     }
                 }

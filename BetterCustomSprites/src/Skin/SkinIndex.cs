@@ -245,10 +245,22 @@ internal static class SkinIndex
     /// 本体每次都会重新 ModUtil.LoadSprite(str)，且 GetSprite 与 GetSpriteData 各答各的。
     /// 判断当前绑定的 replacer 是否就是该角色 override 用的那个实例。
     /// dictOverrides 为空时直接返回，正常情况零额外开销。
+    ///
+    /// 旧本体没有 dictOverrides，字段访问留在 Core 里：这个方法被 ResolveSuffixes
+    /// 无条件调用，写在本体内会在旧本体上 JIT 抛 MissingFieldException（2.6.0 的崩溃）。
     /// </summary>
     internal static bool IsOverrideReplacer(Chara? chara, SpriteReplacer? skin)
     {
-        if (chara is null || skin is null || SpriteReplacer.dictOverrides.Count == 0) {
+        if (!ApiProbe.HasSpriteDataApi || chara is null || skin is null) {
+            return false;
+        }
+
+        return IsOverrideReplacerCore(chara, skin);
+    }
+
+    private static bool IsOverrideReplacerCore(Chara chara, SpriteReplacer skin)
+    {
+        if (SpriteReplacer.dictOverrides.Count == 0) {
             return false;
         }
 

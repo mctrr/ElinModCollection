@@ -8,12 +8,49 @@ namespace ACS.Patches;
 /// 于是贴图被作废、actor 被对象池复用、或角色重新绑定 owner 时，必须显式把
 /// <c>spriteData</c> 置 null：否则本体认为「答案没变」，会一直显示旧图 / 停在旧帧，
 /// 单帧 clip 与静态 _bcs_combat 尤其明显（作用域外的 RefreshSprite 写的是底图）。
+///
+/// 这个类整体依赖 23.359.0 的 public 字段。旧本体上必须整类不注册、并且每个
+/// 真正的字段访问都留在单独的方法里，否则 JIT 抛 MissingFieldException 会让玩家
+/// 进不去存档（2.6.0 的实际事故）。
 /// </summary>
 [HarmonyPatch]
 internal static class SpriteDataInvalidation
 {
+    /// <summary>旧本体没有这些字段，整类不注册（含下面的 ReloadSprite 前缀）。</summary>
+    [HarmonyPrepare]
+    internal static bool Prepare() => ApiProbe.HasSpriteDataApi;
+
     /// <summary>让在场角色的 actor 下一帧重新问一次 GetSpriteData（热重载用）。主线程调用。</summary>
     internal static void InvalidateOnScreenActors()
+    {
+        // 旧本体上到此为止。字段访问在 Core 里，只有这里放行才会被 JIT 编译。
+        if (!ApiProbe.HasSpriteDataApi) {
+            return;
+        }
+
+        InvalidateOnScreenActorsCore();
+    }
+
+    /// <summary>把一个 actor 的 <c>spriteData</c> 置 null。旧本体上是空操作。</summary>
+    internal static void ClearSpriteData(CardActor? actor)
+    {
+        if (actor is null || !ApiProbe.HasSpriteDataApi) {
+            return;
+        }
+
+        ClearSpriteDataCore(actor);
+    }
+
+    /// <summary>
+    /// 字段访问只能待在这里：旧本体永不调用 → 永不 JIT → 不会解析到不存在/非 public 的字段。
+    /// 不要为了「少一个函数」把这一行挪回上面两个方法。
+    /// </summary>
+    private static void ClearSpriteDataCore(CardActor actor)
+    {
+        actor.spriteData = null;
+    }
+
+    private static void InvalidateOnScreenActorsCore()
     {
         try {
             // EClass._map / core 在模组刷新、读档、场景初始化、无 activeZone 时本身会抛 NRE，
@@ -30,7 +67,7 @@ internal static class SpriteDataInvalidation
                     continue;
                 }
 
-                cr.actor.spriteData = null;
+                ClearSpriteDataCore(cr.actor);
             }
         }
         catch (Exception ex) {
@@ -46,7 +83,7 @@ internal static class SpriteDataInvalidation
     [HarmonyPatch(typeof(CardActor), nameof(CardActor.SetOwner))]
     internal static void OnSetOwner(CardActor __instance)
     {
-        __instance.spriteData = null;
+        ClearSpriteData(__instance);
     }
 
     /// <summary>

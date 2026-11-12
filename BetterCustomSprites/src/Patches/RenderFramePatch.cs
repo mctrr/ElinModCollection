@@ -18,6 +18,15 @@ namespace ACS.Patches;
 [HarmonyPatch]
 internal class RenderFramePatch
 {
+    /// <summary>
+    /// 旧本体（&lt; 23.359.0）没有 GetSpriteData 与 public spriteData，整类不注册：
+    /// 一旦注册，OnRender postfix 里的字段访问会让 JIT 抛 MissingFieldException，
+    /// 而它跑在读档 / OnEnterScreen 路径上，玩家会「进不去存档」。
+    /// ClearRuntimeCaches 仍可被外部安全调用（方法体不碰新字段）。
+    /// </summary>
+    [HarmonyPrepare]
+    internal static bool Prepare() => ApiProbe.HasSpriteDataApi;
+
     // ---- OnRender 作用域（Unity 主线程，单字段够用）----
     private static CardActor? _scopeActor;
     private static SpriteData? _scopeAnswer;
@@ -34,6 +43,10 @@ internal class RenderFramePatch
     {
         LastSig.Clear();
         ClearScope();
+
+        // 本类在旧本体上整类跳过，但清理入口固定指向这里（两处调用点），
+        // 所以旧路径的字典也由这里一起清。方法体不碰新 API，两版都能执行。
+        LegacyRenderFramePatch.ClearRuntimeCaches();
     }
 
     private static void ClearScope()
