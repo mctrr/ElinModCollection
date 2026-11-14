@@ -27,18 +27,6 @@ internal static class CoCraftSession
     /// <summary>Why the last clear happened, used for player-facing finish text.</summary>
     internal static string LastClearReason = "";
 
-    // Diagnostics only. Written by the co-craft patches, read by the verbose log
-    // and the end-of-session summary. They never feed any gameplay calculation.
-    internal static int DiagEvalueCalls;
-    internal static int DiagEvalueHits;
-    internal static int DiagEvalueMisses;
-    internal static int DiagFirstMissSkill;
-    internal static int DiagLastEff;
-    internal static int DiagSpHits;
-    internal static int DiagSpSkips;
-    internal static int DiagLastSpRaw;
-    internal static int DiagLastSpAdjusted;
-
     static int _npcSkillDuration;
     static int _npcSkillReq;
     /// <summary>Time.frameCount when the assistant was told to approach; drives the walk timeout.</summary>
@@ -148,13 +136,9 @@ internal static class CoCraftSession
         NpcExpGranted = 0;
         AssistantName = AssistantResolver.NameOf(assistant);
         LastClearReason = "";
-        ResetDiagnostics();
         Active = true;
 
         Msg.SayRaw(NpcLabor.LaborText.T("co.msg.started", AssistantName ?? "?"));
-        Plugin.LogInfo(
-            $"co-craft open: npc={AssistantName}#{NpcUid} req={reqSkillId} dur={durationSkillId} " +
-            $"pc={PcSkill} npcSkill={NpcSkill} eff={Eff}");
         return true;
     }
 
@@ -342,15 +326,6 @@ internal static class CoCraftSession
             AnnounceFinish(reason);
         }
 
-        // One line per craft: proves whether the skill rewrite / SP cut actually ran,
-        // how often, and what the final numbers were. Gated by the verbose switch.
-        Plugin.LogDebug(
-            $"co-craft clear ({reason}) uid={NpcUid} npcExp={NpcExpGranted} " +
-            $"evalueHits={DiagEvalueHits}/{DiagEvalueCalls} misses={DiagEvalueMisses} " +
-            $"firstMissSkill={DiagFirstMissSkill} lastEff={DiagLastEff} " +
-            $"spHits={DiagSpHits} spSkips={DiagSpSkips} " +
-            $"spRaw={DiagLastSpRaw} spAdjusted={DiagLastSpAdjusted} " +
-            $"costSp={CostSp} duration={Duration} batch={BatchNum}");
         Active = false;
         NpcUid = 0;
         ReqSkillId = 0;
@@ -365,20 +340,6 @@ internal static class CoCraftSession
         AssistantName = null;
         _npcSkillDuration = 0;
         _npcSkillReq = 0;
-        ResetDiagnostics();
-    }
-
-    static void ResetDiagnostics()
-    {
-        DiagEvalueCalls = 0;
-        DiagEvalueHits = 0;
-        DiagEvalueMisses = 0;
-        DiagFirstMissSkill = 0;
-        DiagLastEff = 0;
-        DiagSpHits = 0;
-        DiagSpSkips = 0;
-        DiagLastSpRaw = 0;
-        DiagLastSpAdjusted = 0;
     }
 
     static void AnnounceFinish(string reason)

@@ -11,23 +11,6 @@ namespace NpcLabor.Patches;
 [HarmonyPatch(typeof(UIRecipeInfo))]
 internal static class UIRecipeInfoPatches
 {
-    // The craft panel refreshes on every hover, so a naive log here would flood
-    // LogOutput.log. Only emit when the rendered diagnostic actually changes, and
-    // only while verbose logging is on (so turning the switch on re-arms it).
-    static string _lastReqDiag = "";
-    static string _lastSpDiag = "";
-
-    static void DiagOnce(ref string slot, string msg)
-    {
-        if (!Plugin.VerboseLog || slot == msg)
-        {
-            return;
-        }
-
-        slot = msg;
-        Plugin.LogDebug(msg);
-    }
-
     [HarmonyPostfix]
     [HarmonyPatch(nameof(UIRecipeInfo.RefreshList))]
     static void RefreshListPostfix(UIRecipeInfo __instance)
@@ -73,8 +56,6 @@ internal static class UIRecipeInfoPatches
         if (!AssistantResolver.TryPreviewEff(reqSkill.id, out _, out _, out int eff, out _))
         {
             // Off / no assistant: leave vanilla text (pc only).
-            DiagOnce(ref _lastReqDiag,
-                $"[co] ui reqSkill id={reqSkill.id}: preview FAILED (assist off / no valid assistant) - vanilla text kept");
             return;
         }
 
@@ -86,8 +67,6 @@ internal static class UIRecipeInfoPatches
             : NpcLabor.LaborText.T("craft.effLineSkill", skillName, need, eff);
         FontColor c = eff < need ? FontColor.Warning : FontColor.Good;
         info.textReqSkill.SetText(str, c);
-        DiagOnce(ref _lastReqDiag,
-            $"[co] ui reqSkill id={reqSkill.id} need={need} eff={eff} color={c} text=\"{str}\"");
     }
 
     static void RewriteCostSpPreview(UIRecipeInfo info)
@@ -105,20 +84,18 @@ internal static class UIRecipeInfoPatches
 
         if (!AssistantResolver.TryPreviewEff(reqSkill.id, out _, out int npcSkill, out _, out _))
         {
-            DiagOnce(ref _lastSpDiag, "[co] ui spPreview: FAILED (assist off / no valid assistant) - vanilla SP kept");
+            // Off / no assistant: leave the vanilla total.
             return;
         }
 
         string raw = info.textCostSP.text;
         if (raw.IsEmpty() || raw == "-")
         {
-            DiagOnce(ref _lastSpDiag, $"[co] ui spPreview: raw=\"{raw}\" not a number, skipped");
             return;
         }
 
         if (!int.TryParse(StripRich(raw), out int baseSp) || baseSp <= 0)
         {
-            DiagOnce(ref _lastSpDiag, $"[co] ui spPreview: raw=\"{raw}\" parsed to {baseSp}, skipped");
             return;
         }
 
@@ -143,10 +120,6 @@ internal static class UIRecipeInfoPatches
         bool warn = EClass.pc != null && total >= EClass.pc.stamina.value;
         FontColor c = warn ? FontColor.Warning : FontColor.Good;
         info.textCostSP.SetText(total.ToString(), c);
-        DiagOnce(ref _lastSpDiag,
-            $"[co] ui spPreview baseSp={baseSp} perUnit={perUnit} npcSkill={npcSkill} " +
-            $"cut={Mathf.FloorToInt(npcSkill * CoCraftSession.NpcSpPerSkill)} " +
-            $"reducedPer={reducedPer} count={count} -> total={total} color={c}");
     }
 
     static string StripRich(string s)
