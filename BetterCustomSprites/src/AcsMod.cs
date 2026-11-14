@@ -13,7 +13,7 @@ using UnityEngine;
 [assembly: AssemblyInformationalVersion("2.7.0")]
 [assembly: AssemblyProduct(ACS.ModInfo.Guid)]
 [assembly: AssemblyTitle(ACS.ModInfo.Name)]
-[assembly: AssemblyMetadata("Repo", "https://github.com/mctrr/BetterCustomSprites")]
+[assembly: AssemblyMetadata("Repo", "https://github.com/mctrr/ElinModCollection")]
 
 namespace ACS;
 

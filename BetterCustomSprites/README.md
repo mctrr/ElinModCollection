@@ -3,7 +3,7 @@
 [Elin](https://store.steampowered.com/app/2135150/Elin/) 的 **Animated Custom Sprites** 增强版：角色按状态自动切换动画、主角（PCC）与 NPC 动态 Skin、静态战斗图。
 
 > 基于 [gottyduke/Elin.Plugins](https://github.com/gottyduke/Elin.Plugins) 中的 AnimatedCustomSprites，MIT 协议。  
-> 仓库：https://github.com/mctrr/BetterCustomSprites  
+> 仓库：https://github.com/mctrr/ElinModCollection  
 > Steam 创意工坊文案：[中文](docs/workshop-description.md) · [English](docs/workshop-description.en.md) · [日本語](docs/workshop-description.ja.md)
 
 当前版本：`2.5.0`（`mctrr.bettercustomsprites`）
