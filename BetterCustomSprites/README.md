@@ -3,7 +3,7 @@
 [Elin](https://store.steampowered.com/app/2135150/Elin/) 的 **Animated Custom Sprites** 增强版：角色按状态自动切换动画、主角（PCC）与 NPC 动态 Skin、静态战斗图。
 
 > 基于 [gottyduke/Elin.Plugins](https://github.com/gottyduke/Elin.Plugins) 中的 AnimatedCustomSprites，MIT 协议。  
-> 仓库：https://github.com/mctrr/BetterCustomSprites  
+> 仓库：https://github.com/mctrr/ElinModCollection  
 > Steam 创意工坊文案：[中文](docs/workshop-description.md) · [English](docs/workshop-description.en.md) · [日本語](docs/workshop-description.ja.md)
 
 当前版本：`2.5.0`（`mctrr.bettercustomsprites`）
@@ -22,7 +22,7 @@
 | 贴图密度 | `@N` 标注或 `.pref` 的 `scaleTex`：4x 素材占据与 1x 相同的世界尺寸 |
 | 超宽分片 | 单边 > 16384px 的横条按帧边界自动内存分片（不改磁盘文件） |
 | 贴图管理 | 切区域预热 + 按需释放 + 跨重建复用 + 皮肤热加载（默认关） |
-| 设置入口 | 游戏内模组配置页（7 组 23 项）+ `ACS.*` 控制台命令 |
+| 设置入口 | 游戏内模组配置页（7 组 19 项）+ `ACS.*` 控制台命令 |
 
 ---
 
@@ -143,6 +143,8 @@ baseSkinId=foreignSkinId
 `WarmTimeoutMs = 15000` 兜底；进图后 `Tick()` 每 30 帧补扫后进场的 NPC。
 
 预热白名单在配置页「场景预热」组逐项开关：**底图 / idle / greet / move 默认开**，其余默认关。
+但**任何 ≥ 2MB 的贴图不看白名单一律预热**（排在白名单项之后）—— 大图解码最贵，漏一次就是进视野时
+一次可感知的卡顿。前缀不在本场景使用中的片仍然跳过：它们根本不会被渲染。
 
 ### 按需释放
 
@@ -158,8 +160,19 @@ baseSkinId=foreignSkinId
 
 ### 皮肤热加载（默认关）
 
-`FileSystemWatcher` 监视贴图目录，游戏外（Aseprite / 导出脚本）改完 PNG 后**防抖 1.5s**自动作废重载，
-角色下次进画面时才重解码。只处理「改已有图」；新增 / 删除 / 改名要敲 `ACS.ReloadAcs`。
+`FileSystemWatcher` 监视各包的 **Texture 与 Skin** 目录（`Custom/` 与 `Package/*/` 都算），
+游戏外（Aseprite / 导出脚本）改完 **PNG / `.ini` / `.pref`** 后 **防抖 1.5s** 自动失效重载，
+角色下次进画面时才重解码：
+
+- 改 PNG → 丢掉 `tex`/`sprites`，重新读盘；
+- 改 `.ini` → 重读帧数 / 间隔 / `scale`，只有帧数或 `scale` 变了才重解码（改 `time` 不动贴图）；
+- 改 `.pref` → 重读密度，只有 `scaleTex` 变了才重建 sprite。
+
+只处理「改已有文件」；新增 / 删除 / 改名要敲 `ACS.ReloadAcs`。
+
+> 原版切回游戏时会刷新 `TextureData`、原版卡图（`RenderRow.replacer`）和 `sprite_override`
+> （`dictOverrides`），但对 `SpriteReplacer.dictSkins` 只重读 ini/pref、**不重读 PNG** ——
+> 所以自定义皮肤（动态底图与 `_acs_*` 状态片）的热更新只能靠这一项。
 
 ### 超宽横条分片
 
@@ -183,15 +196,13 @@ BCS 绕开 Unity 解码器自己 inflate + 反 filter，按**帧边界**切成�
 | `ACS.SpriteCache ...` | `on`/`off` / 宽限期秒数 / `0`=复位 / `flush` / `gc` |
 | `ACS.KeepTextures on\|off` | 贴图跨重建复用（默认开） |
 | `ACS.HotReload on\|off` | 皮肤热加载（默认关） |
-| `ACS.FullPortrait on\|off` | 全身立绘兜底（默认开） |
-| `ACS.PortraitLayout ...` | 立绘高度 / 偏移 / 左右对齐 |
 | `ACS.DiagLog on\|off` | 诊断日志（性能探针同步开启） |
 | `ACS.Perf [dump\|clear\|load <ms>\|frame <ms>]` | 看每张图被加载了几次、卡在解码还是上传 |
 
 ## 配置页
 
-原版模组配置页（EA 23.350+ 的 ModConfig）会自动出现 BCS 的设置项，7 组 23 项：
-**主角贴图 / 移动动画 / 对话立绘 / 贴图缓存 / 热重载 / 诊断 / 场景预热**。
+原版模组配置页（EA 23.350+ 的 ModConfig）会自动出现 BCS 的设置项，7 组 19 项：
+**渲染路径 / 主角贴图 / 移动动画 / 贴图缓存 / 热重载 / 诊断 / 场景预热**。
 bool → 开关、带范围的数字 → 滑杆，每行自带复位按钮。
 
 配置页、控制台、手改配置文件共用同一份 `ConfigEntry`（`BcsConfig` 是唯一写入口），三者不会互相覆盖。
@@ -230,27 +241,39 @@ BetterCustomSprites/
    ├─ Sprite/
    │  ├─ PngTiler.cs          # 托管 PNG 解码 + 帧几何 + 分片（纯解码，无缓存）
    │  └─ TiledSprite.cs       # 分片贴图 store 唯一入口：Get / 预热 / 释放 / 字节账
-   └─ Patches/
-      ├─ RenderFramePatch.cs  # NPC：CardActor 帧 → ACS clip
-      ├─ PccRenderPatch.cs    # PC：CharaActorPCC 上 ACS 覆盖
-      ├─ AcsSpritePresenter.cs# 缩放约定、底边对齐、bottom-pivot
-      ├─ SkinLoadPatches.cs   # ListSkins / Reload / ACS 后缀规范化 / 超限分片入口
-      ├─ PcSkinSupport.cs     # PC 绑 skin、创角/菜单换肤
-      ├─ PcSkinBinder.cs      # PC 皮肤就绪：冷启动重试、ListSkins 后重绑
-      ├─ PcSkinCommands.cs    # ACS.SetSkin / ClearSkin / ListSkins / Emote / ReloadAcs
-      ├─ StatePatches.cs      # combat 粘滞 + magic/melee/hurt/revive/greet 触发
-      ├─ SkinEditUi.cs        # 换肤列表 UI（分组、首帧图标、Texture 开关）
-      ├─ SkinUi.cs            # LayerEditSkin 入口 + NPC 批量重绑
-      ├─ GreetPrewarm.cs      # 切区域阻塞预热 + 按帧补扫
-      ├─ SpriteCacheEvict.cs  # 按需释放 + 字节预算
-      ├─ SkinTextureReuse.cs  # 重建皮肤表时按路径复用已解码贴图
-      ├─ SkinHotReload.cs     # 皮肤热加载（默认关）
-      ├─ FullPortraitPatch.cs # 对话全身立绘兜底
-      ├─ PortraitAnimator.cs  # 对话动态立绘（序列帧）
-      ├─ SkinPrefPatches.cs / AcsClipIni.cs / TuningCommands.cs
-      ├─ ActEmote.cs / EmoteActPlanPatch.cs   # 表情动作 + 悬停按钮
-      ├─ PeopleMenuPatch.cs / CreateCharSkinPatch.cs
-      ├─ SpriteRefreshGuard.cs / TiledRectGuard.cs  # NRE 保险丝 / 分片 UV 兜底
+   └─ Patches/                # 按职责分子目录，命名空间统一是 ACS.Patches
+      ├─ GameStartPatch.cs    # Game.Load / Scene.Init / Scene.OnUpdate 总入口
+      ├─ TuningCommands.cs    # ACS.* 控制台命令（调参 / 缓存 / 诊断）
+      ├─ Render/              # 角色渲染路径
+      │  ├─ RenderFramePatch.cs      # NPC：CardActor 帧 → ACS clip（夜间版）
+      │  ├─ LegacyRenderFramePatch.cs # 同上，2.5.0 旧路径（稳定版）
+      │  ├─ PccRenderPatch.cs        # PC：CharaActorPCC 上 ACS 覆盖
+      │  ├─ AcsSpritePresenter.cs    # 缩放约定、底边对齐、bottom-pivot
+      │  ├─ SpriteDataInvalidation.cs # 贴图作废后令在场 actor 重新取片
+      │  ├─ SpriteRefreshGuard.cs    # NRE 保险丝
+      │  └─ TiledRectGuard.cs        # 分片 UV 兜底
+      ├─ Skin/                # 皮肤表、编目、绑定（数据侧）
+      │  ├─ SkinLoadPatches.cs       # ListSkins / Reload / ACS 后缀规范化 / 超限分片入口
+      │  ├─ SkinPrefPatches.cs       # .pref 读取
+      │  ├─ TextureSkinCatalog.cs    # Texture 目录编目
+      │  ├─ SkinTextureReuse.cs      # 重建皮肤表时按路径复用已解码贴图
+      │  ├─ SkinHotReload.cs         # 皮肤热加载（默认关）
+      │  ├─ PcSkinSupport.cs         # PC 绑 skin、创角/菜单换肤
+      │  ├─ PcSkinBinder.cs          # PC 皮肤就绪：冷启动重试、ListSkins 后重绑
+      │  ├─ PcSkinCommands.cs        # ACS.SetSkin / ClearSkin / ListSkins / Emote / ReloadAcs
+      │  └─ CreateCharSkinPatch.cs   # 创角面板的换肤入口
+      ├─ State/               # 状态判定与动作触发
+      │  ├─ StatePatches.cs          # combat 粘滞 + magic/melee/hurt/revive/greet 触发
+      │  ├─ ActEmote.cs              # 表情动作
+      │  ├─ EmoteActPlanPatch.cs     # 悬停按钮
+      │  └─ AcsClipIni.cs            # 逐片 .ini 读取
+      ├─ Memory/              # 显存与解码
+      │  ├─ GreetPrewarm.cs          # 切区域阻塞预热 + 按帧补扫（≥2MB 一律预热）
+      │  └─ SpriteCacheEvict.cs      # 按需释放 + 字节预算
+      ├─ Ui/                  # 界面
+      │  ├─ SkinEditUi.cs            # 换肤列表 UI（分组、首帧图标、Texture 开关）
+      │  ├─ SkinUi.cs                # LayerEditSkin 入口 + NPC 批量重绑
+      │  └─ PeopleMenuPatch.cs       # 居民列表右键菜单
       └─ Diagnostics/         # BcsPerf（按需加载/每帧耗时）、PrewarmProbe（预热分段）
 ```
 

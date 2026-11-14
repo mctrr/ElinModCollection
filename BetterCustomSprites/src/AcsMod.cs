@@ -8,12 +8,12 @@ using HarmonyLib;
 using ReflexCLI;
 using UnityEngine;
 
-[assembly: AssemblyVersion("2.5.0.0")]
-[assembly: AssemblyFileVersion("2.5.0.0")]
-[assembly: AssemblyInformationalVersion("2.5.0")]
+[assembly: AssemblyVersion("2.7.0.0")]
+[assembly: AssemblyFileVersion("2.7.0.0")]
+[assembly: AssemblyInformationalVersion("2.7.0")]
 [assembly: AssemblyProduct(ACS.ModInfo.Guid)]
 [assembly: AssemblyTitle(ACS.ModInfo.Name)]
-[assembly: AssemblyMetadata("Repo", "https://github.com/mctrr/BetterCustomSprites")]
+[assembly: AssemblyMetadata("Repo", "https://github.com/mctrr/ElinModCollection")]
 
 namespace ACS;
 
@@ -21,7 +21,7 @@ internal static class ModInfo
 {
     internal const string Guid = "mctrr.bettercustomsprites";
     internal const string Name = "Better Custom Sprites";
-    internal const string Version = "2.5.0";
+    internal const string Version = "2.7.0";
 
     // ---- 已知会抢动画链路的冲突 mod ----
 
@@ -56,44 +56,39 @@ internal class AcsMod : BaseUnityPlugin
         // 立即扫一轮（BepInEx plugins）。Package 里的 mod 加载较晚，后面再 watch 一会。
         TryReportConflict("Awake");
 
+        // 两套渲染路径二选一，补丁类各自用 HarmonyPrepare 门控：
+        //   夜间版 → RenderFramePatch（本体回答 GetSpriteData 并推进帧）
+        //   稳定版 → LegacyRenderFramePatch（原 2.5.0 的 IL 注入 + 自建帧推进）
+        // 判定 = 本体有没有 23.359.0 的 API + 配置页开关；两者都编在同一个 DLL 里，
+        // 玩家在配置页「渲染路径 → 使用稳定版渲染路径」切换。门禁必须在注册前定死：
+        // 旧本体上碰新 API 字段会在 JIT 抛 MissingFieldException，抛点正好落在
+        // 读档 / OnEnterScreen 路径上，玩家看到的是「进不去存档」。
+        Log(RenderPath.Describe());
+
         var harmony = new Harmony(ModInfo.Guid);
-        harmony.PatchAll();
+        // Harmony.PatchAll(Assembly) 内部是纯 foreach，任何一个补丁类抛异常都会中途停下：
+        // 前面的补丁已生效、后面的全部静默丢失，Awake 余下初始化也不执行（mod 半启动，
+        // 表现是「换肤没反应 / 状态动画消失 / ACS.* 命令不见」，最难查的一种）。
+        // 逐类隔离 + 报出类名，让失败可见、可控，其余补丁照常生效。
+        int failed = 0;
+        foreach (var patchType in AccessTools.GetTypesFromAssembly(Assembly.GetExecutingAssembly())) {
+            try {
+                harmony.CreateClassProcessor(patchType).Patch();
+            }
+            catch (Exception ex) {
+                failed++;
+                Error("[BCS] patch class failed: " + patchType.FullName + " :: " + ex);
+            }
+        }
+
+        if (failed > 0) {
+            Error("[BCS] " + failed + " patch class(es) failed; see the errors above.");
+        }
 
         CommandRegistry.assemblies.Add(Assembly.GetExecutingAssembly());
 
         // Package Chainloader 在 ModManager init 之后才加载；持续扫约 10s 覆盖延迟加载。
         StartCoroutine(WatchConflict());
-
-        // 配置页自制控件要在 ModManager 给 dysmod 分好 package 之后才能挂上去，一并交给协程重试。
-        StartCoroutine(WatchConfigUi());
-    }
-
-    /// <summary>
-    /// 等 ModManager 就绪后把自制控件挂进原版配置页。
-    /// 原版 <c>RegisterAll</c> 的时机在 ModManager init 之后、具体时刻不保证，
-    /// 所以用低频轮询而不是一次性尝试。
-    /// </summary>
-    private static IEnumerator WatchConfigUi()
-    {
-        // 与 WatchConflict 同款节奏：0.5s 一轮，约 10s 窗口。
-        for (int i = 0; i < 20; i++) {
-            try {
-                if (BcsConfigUi.TryRegister()) {
-                    yield break;
-                }
-            }
-            catch (Exception ex) {
-                // 单次失败不该中止后续尝试，但也不该每帧刷日志。
-                Warn("[ConfigUI] register attempt #" + i + " threw: " + ex.Message);
-                BcsConfigUi.GiveUp();
-                yield break;
-            }
-
-            yield return new WaitForSecondsRealtime(0.5f);
-        }
-
-        // 十秒都没成功 = 这一局大概率版本不支持（或本 mod 不是以 Package 方式加载）。
-        BcsConfigUi.GiveUp();
     }
 
     /// <summary>

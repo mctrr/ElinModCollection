@@ -16,19 +16,23 @@ namespace ACS.Patches;
 [HarmonyPatch]
 internal class PccRenderPatch
 {
+    // 临时把 temp 设为 -1，跳过原版 OnRender 的主/副手绘制（含战斗武器 tile）
+    private static int _savedTempLeft;
+    private static int _savedTempRight;
+    private static bool _tempsSaved;
+
+    // 23.359.0 把 spriteTimer / spriteIndex 改成 public，直接访问在这版上没问题；
+    // 但旧本体（&lt; 23.359.0）里这两个字段仍是 private，直访会 FieldAccessException。
+    // FieldRefAccess 用 skipVisibility 的动态方法，两版都能用 —— 这是兼容旧本体的代价，
+    // 不是「没清理干净」。
     private static readonly AccessTools.FieldRef<CardActor, float> SpriteTimerRef =
         AccessTools.FieldRefAccess<CardActor, float>("spriteTimer");
 
     private static readonly AccessTools.FieldRef<CardActor, int> SpriteIndexRef =
         AccessTools.FieldRefAccess<CardActor, int>("spriteIndex");
 
-    // 临时把 temp 设为 -1，跳过原版 OnRender 的主/副手绘制（含战斗武器 tile）
-    private static int _savedTempLeft;
-    private static int _savedTempRight;
-    private static bool _tempsSaved;
-
     // 按 actor 分状态推进帧，避免多 PCC 共享 _sharedTimer 串帧
-    // 逐帧推进状态机（原 FrameState）已抽到共享的 ClipClock.State（见 ClipClock.cs），
+    // 逐帧推进状态机在 ClipClock.State（见 ClipClock.cs），23.359.0 起只服务 PC 路径；
     // 这里只留“actor.InstanceID → 状态”的字典，键与清理入口 ClearRuntimeCaches 不变。
     private static readonly Dictionary<int, ClipClock.State> FrameByActor = new Dictionary<int, ClipClock.State>();
 
@@ -217,8 +221,7 @@ internal class PccRenderPatch
             FrameByActor[actorKey] = st;
         }
 
-        // 同帧去重 + sig/clip 变化重播 + timer 累进 + 帧钳制与 NPC 端 AdvanceAndApply
-        // 共用同一套 ClipClock.State.StepFrame，避免两条路径各自维护导致行为漂移。
+        // 同帧去重 + sig/clip 变化重播 + timer 累进 + 帧钳制，由 ClipClock.State.StepFrame 负责。
         int index = st.StepFrame(owner, data);
         SpriteTimerRef(__instance) = st.Timer;
         SpriteIndexRef(__instance) = index;

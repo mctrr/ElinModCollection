@@ -13,7 +13,7 @@
 基于 [b]Animated Custom Sprites[/b]（作者 DK）的增强版，新增角色状态感知的动画自动切换功能。
 
 
-仓库：[url=https://github.com/mctrr/BetterCustomSprites]github.com/mctrr/BetterCustomSprites[/url]
+仓库：[url=https://github.com/mctrr/ElinModCollection]github.com/mctrr/ElinModCollection[/url]
 
 [h2]与原版 ACS 的区别[/h2]
 
@@ -29,6 +29,7 @@
 [*] [b]combat[/b] - 战斗中（原版支持；可再拆 sword / polearm / staff）
 [*] [b]move[/b] - 主角 / NPC 移动时（资源名 _acs_move）
 [*] [b]greet[/b] - 见面问候：NPC 看见玩家时自动播放一次问候动画；有 greet1-4 时随机选一张，播完自动回到 idle
+[*] [b]eat[/b] - 进食：PC 和 NPC（含宠物）吃东西时播放（资源名 _acs_eat）
 [*] [b]wet[/b] - 潮湿 / 曾在水中
 [*] [b]drunk[/b] - 醉酒
 [*] [b]confused[/b] - 混乱
@@ -37,7 +38,7 @@
 [/list]
 
 状态优先级从高到低：
-[code]revive > emote > combat > move > greet(NPC) > wet > drunk > confused > blind > idle[/code]
+[code]revive > emote > combat > eat > move > greet(NPC) > wet > drunk > confused > blind > idle[/code]
 
 异常状态只在非战斗时生效，战斗中一定显示 combat 动画（施法窗口则显示 mcombat）。
 PC 朝反方向释放敌对法术时，会按目标的屏幕水平方向转身。
@@ -48,7 +49,7 @@ PC 朝反方向释放敌对法术时，会按目标的屏幕水平方向转身�
 
 [list]
 [*] [b]前缀[/b]（可选）：任意皮肤名（手动） / snow（雪地） / married（已婚）
-[*] [b]状态[/b]：revive / emote / combat / move / greet / greet1-4 / wet / drunk / confused / blind / idle（idle 无需写出）
+[*] [b]状态[/b]：revive / emote / combat / move / eat / greet / greet1-4 / wet / drunk / confused / blind / idle（idle 无需写出）
 [*] [b]scaleTex[/b]（可选，夜间版 23.343.1+）：贴图密度标注，值 = 期望渲染 PPU。贴图放大了几倍就写几倍：[b]@400[/b] = 图放大 4 倍但世界尺寸与 1x 完全相同（无需重调 y/heightFix 等）。缺省 100（1x，旧行为）
 [/list]
 

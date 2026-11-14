@@ -127,7 +127,7 @@ internal static class PcSkinCommands
     {
         try {
             PccRenderPatch.ClearRuntimeCaches();
-            RenderFramePatch.ClearRuntimeCaches(); // NPC 侧：帧推进 + 战斗贴图“已应用”去重
+            RenderFramePatch.ClearRuntimeCaches(); // NPC 侧：清一次性动作签名字典
             PlayState.ClearHostileScanCache();
             FrameChoice.InvalidateStaticCombatMap();
             TiledSprite.Clear();                   // 分片贴图 store：连字节账一起丢，强制重解
@@ -149,6 +149,10 @@ internal static class PcSkinCommands
 
                     if (c.renderer is CharaRenderer cr) {
                         cr.RefreshSprite();
+                        // 23.359.0：清贴图后必须让 actor 下一帧重新问 GetSpriteData，
+                        // 否则 sd == spriteData 时本体不会切图，单帧皮肤一直显示旧图。
+                        // 旧本体没有 spriteData：走带版本门禁的 helper，避免 JIT 崩溃。
+                        SpriteDataInvalidation.ClearSpriteData(cr.actor);
                         refreshed++;
                     }
                 }

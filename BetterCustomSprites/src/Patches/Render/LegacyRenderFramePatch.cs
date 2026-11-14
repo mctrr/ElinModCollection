@@ -10,16 +10,30 @@ using UnityEngine;
 namespace ACS.Patches;
 
 /// <summary>
+/// 旧本体（&lt; 23.359.0）的渲染路径，原 2.5.0 实现，逻辑与当年一致。
+///
 /// 原版 <see cref="CardActor.OnRender"/> 只播放 replacer.data 的多帧动画。
 /// 本 patch 用 IL 注入，在帧推进逻辑读到 SpriteData 时，换成当前 ACS clip，
 /// 让 NPC / 非 PCC 角色也能按 combat、greet 等状态播动画。
 ///
 /// 主角（PCC）由 <see cref="PccRenderPatch"/> 单独覆盖 SpriteRenderer；
 /// 这里对 CharaActorPCC 直接 return current，避免两套逻辑双重推进帧。
+///
+/// 新本体（23.359.0+）走 <see cref="RenderFramePatch"/>：本体自己调
+/// <c>Chara.GetSpriteData</c> 并推进帧。本类在那种情况下由 HarmonyPrepare 整类跳过 ——
+/// transpiler 不会执行，也就不会命中「sd 变成 local 2 → ldloc.2 操作数为 null」那个崩溃。
+/// 私有帧字段一律走 FieldRefAccess（不用直访），因此同一份 IL 在两种本体上都能加载。
 /// </summary>
 [HarmonyPatch]
-internal class RenderFramePatch
+internal class LegacyRenderFramePatch
 {
+    /// <summary>
+    /// 只服务旧本体。新本体上返回 false → Harmony 整类跳过（Prepare 在目标方法解析之前执行），
+    /// 既不注入 transpiler，也不会去解析 <c>GetSpriteData</c> 等新符号。
+    /// <c>ClearRuntimeCaches</c> 不受影响：它不是补丁方法，方法体也不碰新 API。
+    /// </summary>
+    [HarmonyPrepare]
+    internal static bool Prepare() => !RenderPath.UseSpriteData;
     /// <summary>
     /// 缓存 private 字段访问器。
     /// 若每次 AccessTools.FieldRefAccess 都会反射查找，greet 结束检测会变慢。

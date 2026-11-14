@@ -240,6 +240,40 @@ internal static class SkinIndex
     }
 
     /// <summary>
+    /// 23.359.0 的 sprite_override：Chara.GetSprite 用 GetStr("sprite_override") 从
+    /// SpriteReplacer.dictOverrides 取整张 PNG。BCS 若把 spriteReplacer 回写成皮肤实例，
+    /// 本体每次都会重新 ModUtil.LoadSprite(str)，且 GetSprite 与 GetSpriteData 各答各的。
+    /// 判断当前绑定的 replacer 是否就是该角色 override 用的那个实例。
+    /// dictOverrides 为空时直接返回，正常情况零额外开销。
+    ///
+    /// 旧本体没有 dictOverrides，字段访问留在 Core 里：这个方法被 ResolveSuffixes
+    /// 无条件调用，写在本体内会在旧本体上 JIT 抛 MissingFieldException（2.6.0 的崩溃）。
+    /// </summary>
+    internal static bool IsOverrideReplacer(Chara? chara, SpriteReplacer? skin)
+    {
+        if (!ApiProbe.HasSpriteDataApi || chara is null || skin is null) {
+            return false;
+        }
+
+        return IsOverrideReplacerCore(chara, skin);
+    }
+
+    private static bool IsOverrideReplacerCore(Chara chara, SpriteReplacer skin)
+    {
+        if (SpriteReplacer.dictOverrides.Count == 0) {
+            return false;
+        }
+
+        string id = chara.GetStr("sprite_override");
+        if (id.IsEmpty()) {
+            return false;
+        }
+
+        return SpriteReplacer.dictOverrides.TryGetValue(id, out var overrideSkin)
+            && ReferenceEquals(overrideSkin, skin);
+    }
+
+    /// <summary>
     /// 当前皮可播的 <c>_acs_*</c> 后缀表；没有真实 ACS 返回 null。
     /// 这是渲染热路径（<c>GetAcsClip</c>）唯一的皮肤入口。
     ///
@@ -253,9 +287,11 @@ internal static class SkinIndex
             return null;
         }
 
+        var owner = chara!;
         if (skin.IsCustom && skin.Skin is not null
-            && !ReferenceEquals(chara!.spriteReplacer, skin.Skin)) {
-            chara.spriteReplacer = skin.Skin;
+            && !ReferenceEquals(owner.spriteReplacer, skin.Skin)
+            && !IsOverrideReplacer(owner, owner.spriteReplacer)) {
+            owner.spriteReplacer = skin.Skin;
         }
 
         return skin.Suffixes;

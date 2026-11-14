@@ -62,6 +62,24 @@ internal static class GreetPrewarm
     private const int WarmTimeoutMs = 15000;
 
     /// <summary>
+    /// 大图阈值（字节）。超过它的 png <b>不看状态白名单</b>一律预热。
+    ///
+    /// 为什么按体积而不按状态：解码耗时几乎与像素量成正比，而一张 2MB 的 PNG 解出来
+    /// 往往是 40~80MB 的 RGBA，单张就要上百毫秒 —— 漏预热一次就是进视野/挥第一刀时的
+    /// 一次可感知卡顿。白名单的本意只是「别为几 KB 的小图白白占显存」，对大图完全不成立。
+    /// </summary>
+    private const long LargePngBytes = 2L * 1024 * 1024;
+
+    /// <summary>大图旁路的排序位（排在所有白名单项之后）。</summary>
+    private const int OrderLarge = 5;
+
+    /// <summary>白名单没勾、也没到 <see cref="LargePngBytes"/>：不预热。</summary>
+    private const int NotWarm = -1;
+
+    /// <summary>前缀不在本场景使用中：连大图旁路都不走（那些片根本不会被渲染）。</summary>
+    private const int SkipInactivePrefix = -2;
+
+    /// <summary>
     /// 一个预热任务 = 「这张 png 提前走一遍取图接口」。
     /// 解出来的像素去哪、什么时候建贴图、占多少字节，全在 <see cref="TiledSprite"/> 内部 ——
     /// 这里不再持有 <c>DecodedImage</c>，也不再看缓存键与待建数量。
@@ -497,36 +515,67 @@ internal static class GreetPrewarm
     /// 带前缀的差分片（<c>yongzhuang.greet</c> / <c>snow.move</c> …）按它后面的<b>状态</b>
     /// 归到同一项；前缀只决定「预热谁」—— 只有在用的前缀（<see cref="ActivePrefixes"/>）才预热。
     /// 没有状态段的差分包（<c>_acs_yongzhuang</c>）是该前缀的旧式 idle，归「预热idle」。
-    /// 返回 <c>-1</c> = 这个 clip 不预热，第一次用到时才解码。
+    /// 返回 <see cref="NotWarm"/> = 这个 clip 不预热，第一次用到时才解码；
+    /// 返回 <see cref="SkipInactivePrefix"/> = 前缀没人用，连大图旁路也不走。
     /// </summary>
     private static int ClipOrder(string text)
     {
         string clip = ClipOf(text);
         if (clip.Length == 0) {
-            return WarmBase ? 0 : -1;
+            return WarmBase ? 0 : NotWarm;
         }
 
         AcsSuffixes.SplitClipName(clip, out string prefix, out string state);
         if (prefix.Length > 0 && !ActivePrefixes.Contains(prefix)) {
-            return -1;
+            return SkipInactivePrefix;
         }
 
         switch (state) {
             case "":
-            case "idle": return WarmIdle ? 1 : -1;
+            case "idle": return WarmIdle ? 1 : NotWarm;
             case "greet":
             case "greet1":
             case "greet2":
             case "greet3":
-            case "greet4": return WarmGreet ? 2 : -1;
-            case "move": return WarmMove ? 3 : -1;
-            case "atk": return WarmAtk ? 4 : -1;
-            case "combat": return WarmCombat ? 4 : -1;
-            case "hurt": return WarmHurt ? 4 : -1;
-            case "revive": return WarmRevive ? 4 : -1;
-            case "eat": return WarmEat ? 4 : -1;
-            case "cmove": return WarmCmove ? 4 : -1;
-            default: return -1;
+            case "greet4": return WarmGreet ? 2 : NotWarm;
+            case "move": return WarmMove ? 3 : NotWarm;
+            case "atk": return WarmAtk ? 4 : NotWarm;
+            case "combat": return WarmCombat ? 4 : NotWarm;
+            case "hurt": return WarmHurt ? 4 : NotWarm;
+            case "revive": return WarmRevive ? 4 : NotWarm;
+            case "eat": return WarmEat ? 4 : NotWarm;
+            case "cmove": return WarmCmove ? 4 : NotWarm;
+            default: return NotWarm;
+        }
+    }
+
+    /// <summary>
+    /// 这张图该不该预热、排第几：先过白名单，<b>没勾的状态里凡 ≥ <see cref="LargePngBytes"/> 的照样预热</b>
+    /// （排最后）。前缀不在用的一律跳过 —— 那些片永远不会被渲染，预热纯属白占显存。
+    /// </summary>
+    private static int ResolveOrder(string text, string png)
+    {
+        int order = ClipOrder(text);
+        if (order >= 0) {
+            return order;
+        }
+
+        if (order == SkipInactivePrefix) {
+            return NotWarm;
+        }
+
+        return IsLargePng(png) ? OrderLarge : NotWarm;
+    }
+
+    /// <summary>png 文件是否达到大图阈值。取不到大小（文件正在被写 / 权限）当小图处理。</summary>
+    private static bool IsLargePng(string png)
+    {
+        try {
+            var info = new System.IO.FileInfo(png);
+            return info.Exists && info.Length >= LargePngBytes;
+        }
+        catch (Exception) {
+            return false;
         }
     }
 
@@ -548,9 +597,8 @@ internal static class GreetPrewarm
             skin.suffixes.TryGetValue(string.Empty, out baseData);
         }
 
-        if (WarmBase) {
-            AddDataNeed(baseData, seen, result, 0);
-        }
+        // 底图按空键判：它是新格式的 idle，归「预热底图」那一项。
+        AddDataNeed(baseData, string.Empty, seen, result);
 
         if (skin.suffixes is null) {
             return;
@@ -561,15 +609,12 @@ internal static class GreetPrewarm
                 continue;
             }
 
-            // 只预热配置页勾选的那几类（默认：底图 / greet / move）；其余第一次用到时才解码。
-            int order = ClipOrder(kv.Key);
-            if (order >= 0) {
-                AddDataNeed(kv.Value, seen, result, order);
-            }
+            // 只预热配置页勾选的那几类（默认：底图 / greet / move），外加 ≥2MB 的大图。
+            AddDataNeed(kv.Value, kv.Key, seen, result);
         }
     }
 
-    private static void AddDataNeed(SpriteData? data, HashSet<string> seen, List<Need> result, int order)
+    private static void AddDataNeed(SpriteData? data, string key, HashSet<string> seen, List<Need> result)
     {
         if (data is null || data.path.IsEmpty()) {
             return;
@@ -577,6 +622,11 @@ internal static class GreetPrewarm
 
         string png = data.path + ".png";
         if (Handled.Contains(png) || !seen.Add(png)) {
+            return;
+        }
+
+        int order = ResolveOrder(key, png);
+        if (order < 0) {
             return;
         }
 
@@ -602,8 +652,8 @@ internal static class GreetPrewarm
             return;
         }
 
-        // 只预热配置页勾选的那几类（默认：底图 / greet / move）。
-        int order = ClipOrder(System.IO.Path.GetFileName(png));
+        // 只预热配置页勾选的那几类（默认：底图 / greet / move），外加 ≥2MB 的大图。
+        int order = ResolveOrder(System.IO.Path.GetFileName(png), png);
         if (order < 0) {
             return;
         }
