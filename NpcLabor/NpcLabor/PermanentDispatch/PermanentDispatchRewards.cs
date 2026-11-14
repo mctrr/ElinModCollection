@@ -44,6 +44,19 @@ internal static partial class PermanentDispatchManager
             {
                 Plugin.LogDebug("pdispatch train: " + ex.Message);
             }
+
+            // Skill exp: flat amount per settled month on the posting's own
+            // skill. Player 2026-11-03 — permanent postings used to give the
+            // NPC no development at all (only a potential tick), so a month of
+            // posting was strictly worse for the worker than a town shift.
+            try
+            {
+                worker.ModExp(potSkill, PermanentDispatchDef.MonthlySkillExp);
+            }
+            catch (Exception ex)
+            {
+                Plugin.LogDebug("pdispatch exp: " + ex.Message);
+            }
         }
 
         // 2. Zone specials.
@@ -138,7 +151,9 @@ internal static partial class PermanentDispatchManager
         }
 
         // 祭坛：整段委托只给一件神之武器，不是每月一把——奇跡品质按月发太肥。
-        if (months > 0)
+        // 2026-11-03 玩家要求：必须「连续在岗满 2 个月」才发。monthsPaid 只
+        // 在同一条委托内累计，中途撤走重开就从头算，所以 >= 2 即连续在岗。
+        if (months >= 2)
         {
             Thing? godWeapon = RollGodWeapon(def);
             if (godWeapon != null)
@@ -193,35 +208,38 @@ internal static partial class PermanentDispatchManager
         {
             try
             {
-                FactionBranch? branch = EClass.BranchOrHomeBranch ?? EClass.Branch;
                 string title = LaborTerms.PDispatch + " · " + def.Name;
-                if (branch != null)
-                {
-                    Thing? pack = null;
-                    try { pack = ThingGen.CreateParcel(title, things.ToArray()); } catch { }
-                    if (pack != null)
-                    {
-                        branch.PutInMailBox(pack);
-                        mailed = true;
-                    }
-                    else
-                    {
-                        foreach (Thing t in things)
-                        {
-                            try { branch.PutInMailBox(t); } catch { }
-                        }
+                Thing? pack = null;
+                try { pack = ThingGen.CreateParcel(title, things.ToArray()); } catch { }
 
-                        mailed = true;
+                if (pack != null)
+                {
+                    // Home delivery, exactly like vanilla mails the tax bill and
+                    // the salary parcel. See HomeDelivery.
+                    mailed = HomeDelivery.Deliver(pack);
+                    if (!mailed)
+                    {
+                        try { EClass.pc?.Pick(pack); } catch { }
                     }
                 }
-                else if (EClass.pc != null)
+                else
                 {
+                    mailed = true;
                     foreach (Thing t in things)
                     {
-                        try { EClass.pc.Pick(t); } catch { }
+                        try
+                        {
+                            if (!HomeDelivery.Deliver(t))
+                            {
+                                mailed = false;
+                                EClass.pc?.Pick(t);
+                            }
+                        }
+                        catch
+                        {
+                            mailed = false;
+                        }
                     }
-
-                    mailed = true;
                 }
             }
             catch (Exception ex)

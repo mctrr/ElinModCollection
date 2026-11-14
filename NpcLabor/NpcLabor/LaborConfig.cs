@@ -25,6 +25,21 @@ internal sealed class LaborConfigFile
 
     [JsonProperty("unlock")]
     public UnlockConfigSection Unlock = new UnlockConfigSection();
+
+    [JsonProperty("log")]
+    public LogConfigSection Log = new LogConfigSection();
+}
+
+/// <summary>
+/// Diagnostics verbosity. Off by default: routine play writes no per-action
+/// lines to BepInEx/LogOutput.log. The in-game ModConfig "Debug" tab flips it
+/// live (no restart) so a player can turn logging on right before reproducing
+/// a problem and off again afterwards.
+/// </summary>
+internal sealed class LogConfigSection
+{
+    [JsonProperty("verbose")]
+    public bool Verbose = false;
 }
 
 /// <summary>
@@ -51,8 +66,10 @@ internal sealed class FeatureConfigSection
 
 internal sealed class TownLaborConfigSection
 {
+    /// <summary>Base hourly wage. Player 2026-11-03: 50 -> 20 (town labor paid
+    /// too well next to permanent postings).</summary>
     [JsonProperty("minWagePerHour")]
-    public int MinWagePerHour = 50;
+    public int MinWagePerHour = 20;
 
     [JsonProperty("expPerHour")]
     public int ExpPerHour = 12;
@@ -79,8 +96,9 @@ internal sealed class TownLaborConfigSection
     [JsonProperty("investTownHeadroom")]
     public int InvestTownHeadroom = 5;
 
+    /// <summary>Plat floor per shift. Player 2026-11-03: 2 -> 1.</summary>
     [JsonProperty("platBase")]
-    public int PlatBase = 2;
+    public int PlatBase = 1;
 
     [JsonProperty("platPerInvestTier")]
     public int PlatPerInvestTier = 2;
@@ -163,6 +181,18 @@ internal sealed class UnlockConfigSection
 
     [JsonProperty("dungeonBranchLv")]
     public int DungeonBranchLv = 5;
+
+    /// <summary>Town shop labor (slice E) needs this home-branch level (player 2026-11-02).</summary>
+    [JsonProperty("townLaborBranchLv")]
+    public int TownLaborBranchLv = 2;
+
+    /// <summary>Base production on the workbench (slice G) needs this level (player 2026-11-02).</summary>
+    [JsonProperty("craftBranchLv")]
+    public int CraftBranchLv = 2;
+
+    /// <summary>Permanent postings need this level (player 2026-11-02).</summary>
+    [JsonProperty("pdispatchBranchLv")]
+    public int PDispatchBranchLv = 2;
 }
 
 internal static class LaborConfig
@@ -227,6 +257,15 @@ internal static class LaborConfig
         }
     }
 
+    /// <summary>
+    /// Plain field read on purpose: <see cref="Plugin.LogDebug"/> is called from
+    /// hot paths and from inside <see cref="EnsureLoaded"/> itself, so going through
+    /// <see cref="Data"/> here would re-enter config loading. The config screen
+    /// mutates this very same <see cref="LaborConfigFile"/> instance, so toggling
+    /// the switch takes effect immediately without any extra sync call.
+    /// </summary>
+    internal static bool VerboseLog => _data.Log != null && _data.Log.Verbose;
+
     /// <summary>Master switch. Off parks every slice and stops the hourly tick.</summary>
     internal static bool FeatureEnabled => Features.Enabled;
 
@@ -268,6 +307,9 @@ internal static class LaborConfig
 
     internal static int RegionUnlockBranchLv => Math.Max(0, Unlock.RegionBranchLv);
     internal static int DungeonUnlockBranchLv => Math.Max(0, Unlock.DungeonBranchLv);
+    internal static int TownLaborUnlockBranchLv => Math.Max(0, Unlock.TownLaborBranchLv);
+    internal static int CraftUnlockBranchLv => Math.Max(0, Unlock.CraftBranchLv);
+    internal static int PDispatchUnlockBranchLv => Math.Max(0, Unlock.PDispatchBranchLv);
 
     /// <summary>Absolute path of labor_config.json, or "" when the mod dir is unknown.</summary>
     internal static string ConfigPath
@@ -388,6 +430,7 @@ internal static class LaborConfig
             Dispatch = new DispatchConfigSection(),
             Process = new ProcessConfigSection(),
             Unlock = new UnlockConfigSection(),
+            Log = new LogConfigSection(),
         };
 
     static LaborConfigFile MergeWithDefaults(LaborConfigFile file)
@@ -416,6 +459,11 @@ internal static class LaborConfig
         if (file.Unlock != null)
         {
             d.Unlock = file.Unlock;
+        }
+
+        if (file.Log != null)
+        {
+            d.Log = file.Log;
         }
 
         return d;

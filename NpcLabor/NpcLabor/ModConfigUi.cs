@@ -125,6 +125,9 @@ internal static class ModConfigUi
 
         Int(note, "cfg.unlock.region", () => u.RegionBranchLv, v => u.RegionBranchLv = v, 0, 20);
         Int(note, "cfg.unlock.dungeon", () => u.DungeonBranchLv, v => u.DungeonBranchLv = v, 0, 20);
+        Int(note, "cfg.unlock.townLabor", () => u.TownLaborBranchLv, v => u.TownLaborBranchLv = v, 0, 20);
+        Int(note, "cfg.unlock.craft", () => u.CraftBranchLv, v => u.CraftBranchLv = v, 0, 20);
+        Int(note, "cfg.unlock.pdispatch", () => u.PDispatchBranchLv, v => u.PDispatchBranchLv = v, 0, 20);
     }
 
     /// <summary>
@@ -136,6 +139,24 @@ internal static class ModConfigUi
     static void BuildDebug(UINote note, LaborConfigFile c)
     {
         note.AddHeader(LaborText.T("cfg.sec.debug"), null);
+
+        // Diagnostics are off by default. This toggle flips the live config object,
+        // so it takes effect in the very same frame - no restart, no reload. The
+        // boundary line uses LogAlways so it is visible even after switching off.
+        if (c.Log == null)
+        {
+            c.Log = new LogConfigSection();
+        }
+
+        Toggle(note, "cfg.dbg.verbose", () => c.Log.Verbose, v =>
+        {
+            c.Log.Verbose = v;
+            Plugin.LogAlways(v
+                ? $"[log] verbose diagnostics ON (build {BuildStamp.Id}) - reproduce the issue now"
+                : "[log] verbose diagnostics OFF");
+
+        });
+        note.AddTopic(LaborText.T("cfg.dbg.verboseHint"), "");
         note.AddTopic(LaborText.T("cfg.dbg.pdispHint"), "");
 
         note.AddButton(LaborText.T("cfg.dbg.pdispMonth"), () =>

@@ -38,13 +38,23 @@ internal sealed class PermanentDispatchDef
     /// Named GuildId so the vanilla Guild type stays addressable inside this class.</summary>
     public string GuildId = "";
 
+    /// <summary>
+    /// Flat skill exp granted to the worker for every settled whole month.
+    /// Player 2026-11-03: permanent postings gave NO development at all, which
+    /// made them strictly worse than town labor for the NPC itself.
+    /// </summary>
+    internal const int MonthlySkillExp = 100;
+
     /// <summary>Base gold per settled month (the flat part of the pay).</summary>
     public int MoneyPerMonth;
 
     /// <summary>
     /// Gold per point of the relevant skill, added on top of
-    /// <see cref="MoneyPerMonth"/>. Player formula 2026-11-02:
-    /// village odd jobs 5/pt, town jobs 10/pt, guild posts 20/pt.
+    /// <see cref="MoneyPerMonth"/>. Player formula 2026-11-03 (village base
+    /// raised 100 -> 200): the skill is worth a flat 2/3/4/5 gold per point
+    /// across the four job tiers —
+    /// village <c>200 + skill*2</c>, town <c>300 + skill*3</c>,
+    /// guild <c>500 + skill*4</c>, concert <c>1000 + music*5</c>.
     /// </summary>
     public int MoneyPerSkill;
 
@@ -194,99 +204,6 @@ internal sealed class PermanentDispatchDef
         }
     }
 
-    /// <summary>
-    /// Short reward summary for the board row: items and zone effects only.
-    /// Money is deliberately NOT advertised (player spec 2026-10-30: list what
-    /// you get, not how much it pays); it only shows for money-only postings so
-    /// the row is never blank. Potential gain stays a hidden surprise.
-    /// </summary>
-    internal string RewardText()
-    {
-        var bits = new List<string>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        for (int i = 0; i < ItemIds.Length && bits.Count < 3; i++)
-        {
-            string name = ItemName(ItemIds[i]);
-            if (!string.IsNullOrEmpty(name) && seen.Add(name))
-            {
-                bits.Add(name);
-            }
-        }
-
-        if (!string.IsNullOrEmpty(BlessedItemId) && bits.Count < 3)
-        {
-            string blessed = ItemName(BlessedItemId);
-            if (!string.IsNullOrEmpty(blessed))
-            {
-                bits.Add(LaborText.T("pdisp.reward.blessed", blessed));
-            }
-        }
-
-        // 祭坛：每月一件该神偏好的武器（奇跡以上），见 Rewards.RollGodWeapon。
-        if (Special == "faith")
-        {
-            bits.Add(LaborText.T("pdisp.reward.godweapon"));
-        }
-
-        switch (Special)
-        {
-            case "develop":
-                bits.Add(LaborText.T("pdisp.reward.develop"));
-                break;
-            case "influence":
-                bits.Add(LaborText.T("pdisp.reward.influence"));
-                break;
-            case "townInfluence":
-                bits.Add(LaborText.T("pdisp.reward.townInfluence"));
-                break;
-            case "indulgence":
-                bits.Add(LaborText.T("pdisp.reward.indulgence"));
-                break;
-            case "faith":
-                bits.Add(LaborText.T("pdisp.reward.faith"));
-                break;
-        }
-
-        if (bits.Count == 0 && MoneyPerMonth > 0)
-        {
-            bits.Add(MoneyText(MoneyPerMonth));
-        }
-
-        return bits.Count == 0 ? "" : string.Join("、", bits);
-    }
-
-    /// <summary>Localized thing name; empty when the source row is missing (RQX off).</summary>
-    internal static string ItemName(string id)
-    {
-        try
-        {
-            if (EClass.sources?.things?.map != null
-                && EClass.sources.things.map.TryGetValue(id, out SourceThing.Row? row)
-                && row != null)
-            {
-                string n = row.GetName();
-                return string.IsNullOrEmpty(n) ? "" : n;
-            }
-        }
-        catch { }
-
-        return "";
-    }
-
-    /// <summary>Gold amount in the game's own currency wording ("800奥伦").</summary>
-    internal static string MoneyText(int amount)
-    {
-        try
-        {
-            return "qReward".lang(amount.ToString());
-        }
-        catch
-        {
-            return amount.ToString();
-        }
-    }
-
     /// <summary>Localized guild name for the rank gate line.</summary>
     internal string GuildName => LaborText.T("pdisp.guild." + (IsGuildTask ? GuildId : "fighter"));
 
@@ -295,14 +212,15 @@ internal sealed class PermanentDispatchDef
     /// </summary>
     internal string GateText()
     {
-        if (IsGuildTask)
-        {
-            return LaborText.T("pdisp.ui.guildGate", GuildName, GuildRankGate);
-        }
+        string gate = IsGuildTask
+            ? LaborText.T("pdisp.ui.guildGate", GuildName, GuildRankGate)
+            : GateSkill > 0
+                ? LaborText.T("pdisp.ui.gate", SkillName(GateSkill), GateLevel)
+                : "";
 
-        return GateSkill > 0
-            ? LaborText.T("pdisp.ui.gate", SkillName(GateSkill), GateLevel)
-            : "";
+        // Trust is a global rule, so it shows up on every posting's gate line.
+        string affinity = LaborText.T("pdisp.ui.affinityGate", MinAffinity);
+        return string.IsNullOrEmpty(gate) ? affinity : gate + " " + affinity;
     }
 
     /// <summary>Localized element name; the source row name is the EN column.</summary>
@@ -326,8 +244,34 @@ internal sealed class PermanentDispatchDef
         return id.ToString();
     }
 
+    /// <summary>
+    /// A resident only takes a posting once they actually trust the player
+    /// (player rule 2026-11-02: affinity above 200). Applied when a posting
+    /// starts and when candidates are listed — never at settlement, so a dip in
+    /// affinity does not silently cancel a running posting.
+    /// </summary>
+    internal const int MinAffinity = 200;
+
+    internal static bool AffinityMet(Chara npc)
+    {
+        try
+        {
+            return npc._affinity > MinAffinity;
+        }
+        catch
+        {
+            // Never let a reflection/API change lock every posting out.
+            return true;
+        }
+    }
+
     internal bool GateMet(Chara npc)
     {
+        if (!AffinityMet(npc))
+        {
+            return false;
+        }
+
         if (GateSkill <= 0)
         {
             return true;
@@ -427,7 +371,7 @@ internal sealed class PermanentDispatchDef
         {
             Id = "pd_fishing", ZoneId = "kapul", NameKey = "pdisp.name.fishing",
             GateSkill = 245, GateLevel = 10, // fishing > 10
-            MoneyPerMonth = 300, MoneyPerSkill = 10,
+            MoneyPerMonth = 300, MoneyPerSkill = 3,
             ItemIds = new[] { "fish" }, ItemScaleBase = 1, ItemScaleDivisor = 20, ItemScaleCap = 10,
             PotentialSkill = 245,
         },
@@ -435,7 +379,7 @@ internal sealed class PermanentDispatchDef
         {
             Id = "pd_coach_fighter", ZoneId = "kapul", NameKey = "pdisp.name.coach",
             GuildId = "fighter",
-            MoneyPerMonth = 500, MoneyPerSkill = 20,
+            MoneyPerMonth = 500, MoneyPerSkill = 4,
             ItemIds = new[] { "MOD_byakko_RQX_guilpo_fighter" },
             ItemScaleBase = 1, ItemScaleDivisor = 20, ItemScaleCap = 10,
             PotentialSkill = -1, Special = "guilpo:fighter",
@@ -449,7 +393,7 @@ internal sealed class PermanentDispatchDef
             // Player correction 2026-11-01: patrols raise the town's INFLUENCE
             // (what the board charges for rerolls), not its development.
             // 2026-11-02: fixed +5 a month, and confiscated lockpicks as loot.
-            MoneyPerMonth = 300, MoneyPerSkill = 10,
+            MoneyPerMonth = 300, MoneyPerSkill = 3,
             ItemIds = new[] { "lockpick" }, ItemCount = 1, ItemCountMax = 3,
             PotentialSkill = 132, Special = "townInfluence", ZonePoints = 5,
         },
@@ -457,7 +401,7 @@ internal sealed class PermanentDispatchDef
         {
             Id = "pd_lookout", ZoneId = "derphy", NameKey = "pdisp.name.lookout",
             GuildId = "thief",
-            MoneyPerMonth = 500, MoneyPerSkill = 20,
+            MoneyPerMonth = 500, MoneyPerSkill = 4,
             ItemIds = new[] { "MOD_byakko_RQX_guilpo_thief" },
             ItemScaleBase = 1, ItemScaleDivisor = 20, ItemScaleCap = 10,
             PotentialSkill = -1, Special = "guilpo:thief",
@@ -468,7 +412,7 @@ internal sealed class PermanentDispatchDef
         {
             Id = "pd_winery", ZoneId = "olvina", NameKey = "pdisp.name.winery",
             GateSkill = 286, GateLevel = 10, // farming > 10
-            MoneyPerMonth = 300, MoneyPerSkill = 10,
+            MoneyPerMonth = 300, MoneyPerSkill = 3,
             ItemIds = new[] { "48" }, ItemScaleBase = 1, ItemScaleDivisor = 5, ItemScaleCap = 20, // 48 = bottle of wine
             // 10% of the months the press gives the Lumiest speciality instead:
             // crimale2 = 鲁米艾斯特产『库莱姆酒』.
@@ -481,7 +425,7 @@ internal sealed class PermanentDispatchDef
         {
             Id = "pd_hunter", ZoneId = "lothria", NameKey = "pdisp.name.hunter",
             GateSkill = 133, GateLevel = 10, // marksman > 10
-            MoneyPerMonth = 300, MoneyPerSkill = 10,
+            MoneyPerMonth = 300, MoneyPerSkill = 3,
             // meat_marble is created by id, never generated from a corpse, so the
             // material stays meat instead of whatever the prey was made of.
             ItemIds = new[] { "meat_marble" }, ItemScaleBase = 1, ItemScaleDivisor = 10, ItemScaleCap = 20,
@@ -493,7 +437,7 @@ internal sealed class PermanentDispatchDef
         {
             Id = "pd_market", ZoneId = "mysilia", NameKey = "pdisp.name.market",
             GateSkill = 291, GateLevel = 10, // negotiation > 10
-            MoneyPerMonth = 300, MoneyPerSkill = 10,
+            MoneyPerMonth = 300, MoneyPerSkill = 3,
             // 338 = 耐酸保护液 (acidproof liquid), a numeric id like 48 above.
             ItemIds = new[] { "blanket_fire", "blanket_cold", "338", "bandage" },
             ItemScaleBase = 1, ItemScaleDivisor = 10, ItemScaleCap = 5,
@@ -505,7 +449,7 @@ internal sealed class PermanentDispatchDef
         {
             Id = "pd_broker", ZoneId = "guild_merchant", NameKey = "pdisp.name.broker",
             GuildId = "merchant",
-            MoneyPerMonth = 500, MoneyPerSkill = 20,
+            MoneyPerMonth = 500, MoneyPerSkill = 4,
             ItemIds = new[] { "MOD_byakko_RQX_guilpo_merchant" },
             ItemScaleBase = 1, ItemScaleDivisor = 20, ItemScaleCap = 10,
             PotentialSkill = -1, Special = "guilpo:merchant",
@@ -519,7 +463,7 @@ internal sealed class PermanentDispatchDef
         {
             Id = "pd_farm", ZoneId = "foxtown", NameKey = "pdisp.name.farm",
             GateSkill = 286, GateLevel = 5, // farming > 5
-            MoneyPerMonth = 100, MoneyPerSkill = 5,
+            MoneyPerMonth = 200, MoneyPerSkill = 2,
             ItemIds = new[] { "rice" }, // 米
             ItemScaleBase = 1, ItemScaleDivisor = 10, ItemScaleCap = 10,
             PotentialSkill = 286,
@@ -528,7 +472,7 @@ internal sealed class PermanentDispatchDef
         {
             Id = "pd_farm_yowyn", ZoneId = "yowyn", NameKey = "pdisp.name.farm_dry",
             GateSkill = 286, GateLevel = 5, // farming > 5
-            MoneyPerMonth = 100, MoneyPerSkill = 5,
+            MoneyPerMonth = 200, MoneyPerSkill = 2,
             ItemIds = new[] { "carrot", "cabbage", "radish", "potato", "tomato", "corn" },
             ItemScaleBase = 1, ItemScaleDivisor = 10, ItemScaleCap = 10,
             PotentialSkill = 286,
@@ -537,7 +481,7 @@ internal sealed class PermanentDispatchDef
         {
             Id = "pd_altar_foxtown", ZoneId = "foxtown", NameKey = "pdisp.name.altar",
             GateSkill = 306, GateLevel = 10, // faith > 10
-            MoneyPerMonth = 100, MoneyPerSkill = 5,
+            MoneyPerMonth = 200, MoneyPerSkill = 2,
             PotentialSkill = 306, Special = "faith",
         },
 
@@ -546,7 +490,7 @@ internal sealed class PermanentDispatchDef
         {
             Id = "pd_painter", ZoneId = "lumiest", NameKey = "pdisp.name.painter",
             GateSkill = 258, GateLevel = 10, // sculpture > 10
-            MoneyPerMonth = 300, MoneyPerSkill = 10,
+            MoneyPerMonth = 300, MoneyPerSkill = 3,
             ItemIds = new[] { "267", "268", "269", "270" },
             ItemScaleBase = 1, ItemScaleDivisor = 20, ItemScaleCap = 4,
             PotentialSkill = 258,
@@ -555,7 +499,7 @@ internal sealed class PermanentDispatchDef
         {
             Id = "pd_tutor_mage", ZoneId = "lumiest", NameKey = "pdisp.name.tutor",
             GuildId = "mage",
-            MoneyPerMonth = 500, MoneyPerSkill = 20,
+            MoneyPerMonth = 500, MoneyPerSkill = 4,
             ItemIds = new[] { "MOD_byakko_RQX_guilpo_mage" },
             ItemScaleBase = 1, ItemScaleDivisor = 20, ItemScaleCap = 10,
             PotentialSkill = -1, Special = "guilpo:mage",
@@ -566,7 +510,7 @@ internal sealed class PermanentDispatchDef
         {
             Id = "pd_concert", ZoneId = "palmia", NameKey = "pdisp.name.concert",
             GateSkill = 241, GateLevel = 50, // music > 50 (player 2026-11-02)
-            MoneyPerMonth = 1000, MoneyPerSkill = 10, // 1000 + music x 10
+            MoneyPerMonth = 1000, MoneyPerSkill = 5, // 1000 + music x 5
             ItemIds = new[] { "plat" }, // 白金币
             ItemScaleBase = 1, ItemScaleDivisor = 10, ItemScaleCap = 10,
             PotentialSkill = 241,
@@ -579,7 +523,7 @@ internal sealed class PermanentDispatchDef
         {
             Id = "pd_gather", ZoneId = "specwing", NameKey = "pdisp.name.gather",
             GateSkill = 250, GateLevel = 10, // gathering > 10
-            MoneyPerMonth = 100, MoneyPerSkill = 5,
+            MoneyPerMonth = 200, MoneyPerSkill = 2,
             ItemIds = new[] { "berry", "nuts", "mushroom" }, // 山货：浆果/坚果/蘑菇
             ItemScaleBase = 1, ItemScaleDivisor = 20, ItemScaleCap = 6,
             PotentialSkill = 250,
@@ -590,7 +534,7 @@ internal sealed class PermanentDispatchDef
         {
             Id = "pd_inn", ZoneId = "foxtown_nefu", NameKey = "pdisp.name.inn",
             GateSkill = 287, GateLevel = 10, // cooking > 10
-            MoneyPerMonth = 100, MoneyPerSkill = 5,
+            MoneyPerMonth = 200, MoneyPerSkill = 2,
             // lunch_love = 爱之盒饭: the cook packs her own lunch for you
             // (player 2026-11-02, replacing the old buns/jerky).
             ItemIds = new[] { "lunch_love" },
@@ -601,7 +545,7 @@ internal sealed class PermanentDispatchDef
         {
             Id = "pd_shrine_nefu", ZoneId = "foxtown_nefu", NameKey = "pdisp.name.altar",
             GateSkill = 306, GateLevel = 10,
-            MoneyPerMonth = 100, MoneyPerSkill = 5,
+            MoneyPerMonth = 200, MoneyPerSkill = 2,
             PotentialSkill = 306, Special = "faith",
         },
 
@@ -610,7 +554,7 @@ internal sealed class PermanentDispatchDef
         {
             Id = "pd_church", ZoneId = "noyel", NameKey = "pdisp.name.church",
             GateSkill = 306, GateLevel = 10,
-            MoneyPerMonth = 100, MoneyPerSkill = 5,
+            MoneyPerMonth = 200, MoneyPerSkill = 2,
             PotentialSkill = 306, Special = "indulgence",
             BlessedItemId = "water",
             BlessedScaleDivisor = 30, BlessedScaleCap = 10,
@@ -621,7 +565,7 @@ internal sealed class PermanentDispatchDef
         {
             Id = "pd_forge", ZoneId = "aquli", NameKey = "pdisp.name.forge",
             GateSkill = 256, GateLevel = 10, // blacksmith > 10
-            MoneyPerMonth = 300, MoneyPerSkill = 10,
+            MoneyPerMonth = 300, MoneyPerSkill = 3,
             ItemIds = new[] { "crystal_earth" }, // 大地的结晶
             ItemScaleBase = 3, ItemScaleDivisor = 10, ItemScaleCap = 15,
             PotentialSkill = 256,
@@ -630,7 +574,7 @@ internal sealed class PermanentDispatchDef
         {
             Id = "pd_altar_aquli", ZoneId = "aquli", NameKey = "pdisp.name.altar",
             GateSkill = 306, GateLevel = 10, // faith > 10
-            MoneyPerMonth = 100, MoneyPerSkill = 5,
+            MoneyPerMonth = 200, MoneyPerSkill = 2,
             PotentialSkill = 306, Special = "faith",
             GodId = "machine", // 阿库里的祭坛就是机械神的那一座（altar_machine）
         },
@@ -640,7 +584,7 @@ internal sealed class PermanentDispatchDef
         {
             Id = "pd_porter", ZoneId = "tinkerCamp", NameKey = "pdisp.name.porter",
             GateSkill = 207, GateLevel = 10, // weightlifting > 10
-            MoneyPerMonth = 300, MoneyPerSkill = 10,
+            MoneyPerMonth = 300, MoneyPerSkill = 3,
             ItemIds = new[] { "ration" }, // 旅粮
             ItemScaleBase = 1, ItemScaleDivisor = 10, ItemScaleCap = 10,
             PotentialSkill = 207,

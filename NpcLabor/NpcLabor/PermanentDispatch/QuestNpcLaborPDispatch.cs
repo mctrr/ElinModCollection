@@ -107,29 +107,17 @@ internal sealed class QuestNpcLaborPDispatch : Quest
             return "";
         }
 
-        var sb = new StringBuilder();
-
-        // Commission text first, in the voice of whoever hands the post out;
-        // then the hard numbers (gate + what you get back).
-        string desc = def.Description;
-        if (desc.Length > 0)
-        {
-            sb.Append(desc).Append("\n\n");
-        }
-
-        sb.Append(def.GateText());
-        string reward = def.RewardText();
-        if (reward.Length > 0)
-        {
-            sb.Append("\n").Append(reward);
-        }
+        // Commission text only. Player spec (twice now, 2026-11-01 and 11-02):
+        // no gate line, no reward line in here — the header already carries the
+        // pay, and a posting should read like the notice it is.
+        var sb = new StringBuilder(def.Description);
 
         if (active)
         {
             PermanentDispatchMission? m = Mission;
             if (m != null)
             {
-                sb.Append("\n").Append(NpcLabor.LaborText.T("pdisp.ui.served", m.monthsPaid));
+                sb.Append("\n\n").Append(NpcLabor.LaborText.T("pdisp.ui.served", m.monthsPaid));
                 sb.Append("\n").Append(NpcLabor.LaborText.T("pdisp.ui.nextSettle",
                     Date.GetText(PermanentDispatchManager.HoursToNextMonth())));
             }

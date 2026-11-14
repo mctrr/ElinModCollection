@@ -468,20 +468,9 @@ foreach (Thing t in things)
             return;
         }
 
-        // Off-map: home mailbox parcel.
+        // Off-map: home delivery, exactly like vanilla mails the tax bill.
         try
         {
-            FactionBranch? branch = EClass.BranchOrHomeBranch ?? EClass.Branch;
-            if (branch == null)
-            {
-                foreach (Thing t in things)
-                {
-                    try { EClass.pc?.Pick(t); } catch { }
-                }
-
-                return;
-            }
-
             string title = LaborTerms.TownWork + " · " + (string.IsNullOrEmpty(mission.jobTitle) ? NpcLabor.LaborText.T("town.msg.town") : mission.jobTitle);
             Thing? pack = null;
             try
@@ -497,7 +486,14 @@ foreach (Thing t in things)
             {
                 foreach (Thing t in things)
                 {
-                    try { branch.PutInMailBox(t); } catch { }
+                    try
+                    {
+                        if (!HomeDelivery.Deliver(t))
+                        {
+                            EClass.pc?.Pick(t);
+                        }
+                    }
+                    catch { }
                 }
 
                 return;
@@ -505,11 +501,14 @@ foreach (Thing t in things)
 
             try
             {
-                branch.PutInMailBox(pack);
+                if (!HomeDelivery.Deliver(pack))
+                {
+                    EClass.pc?.Pick(pack);
+                }
             }
             catch (Exception ex)
             {
-                Plugin.LogWarn("townlabor mailbox: " + ex.Message);
+                Plugin.LogWarn("townlabor delivery: " + ex.Message);
                 try { EClass.pc?.Pick(pack); } catch { }
             }
         }

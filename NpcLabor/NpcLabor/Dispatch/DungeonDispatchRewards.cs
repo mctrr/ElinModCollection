@@ -165,10 +165,12 @@ internal static partial class DungeonDispatchRewards
                 return;
             }
 
-            if (!TryPutInHomeMail(branch, mission, pack))
+            if (!HomeDelivery.Deliver(pack))
             {
-                Plugin.LogWarn("dispatch deliver mailbox failed mission=" + mission.missionId);
-                return;
+                // Delivery queue unreachable; hand it over rather than let the
+                // settlement vanish.
+                Plugin.LogWarn("dispatch deliver queue failed mission=" + mission.missionId);
+                try { EClass.pc?.Pick(pack); } catch { }
             }
 
             Plugin.LogInfo("dispatch deliver ok kind=" + kind + " mission=" + mission.missionId
@@ -1194,102 +1196,6 @@ internal static partial class DungeonDispatchRewards
 return first;
     }
 
-
-    /// <summary>
-    /// PutInMailBox only looks at EClass._map. When the mission finishes while PC is
-    /// away from the base, drop into home zone map / owner map instead of current map.
-    /// </summary>
-    static bool TryPutInHomeMail(FactionBranch branch, DungeonDispatchMission mission, Thing pack)
-    {
-        if (branch == null || pack == null)
-        {
-            return false;
-        }
-
-        Zone? home = null;
-        try
-        {
-            home = mission?.GetHomeZone() ?? branch.owner;
-        }
-        catch
-        {
-            home = branch.owner;
-        }
-
-        // Preferred path: vanilla API when PC is already at the home active map.
-
-            bool atHome = false;
-            try
-            {
-                atHome = home != null
-                    && EClass._zone != null
-                    && (EClass._zone.uid == home.uid
-                        || (EClass._zone.GetTopZone()?.uid ?? -1) == home.uid
-                        || (home.IsPCFaction && EClass._zone.IsPCFaction && EClass._zone == home));
-            }
-            catch
-            {
-                atHome = home != null && EClass._zone != null && EClass._zone.uid == home.uid;
-            }
-
-            if (atHome)
-            {
-                branch.PutInMailBox(pack);
-                return true;
-            }
-
-
-        // Off-home settle: write into home zone's installed mailbox if map is loaded.
-        try
-        {
-            Map? map = null;
-            try
-            {
-                map = home?.map;
-            }
-            catch
-            {
-                map = null;
-            }
-
-            if (map?.props?.installed != null)
-            {
-                Thing? mail = null;
-                try
-                {
-                    mail = map.props.installed.FindEmptyContainer<TraitMailPost>();
-                }
-                catch
-                {
-
-                        mail = map.props.installed.Find<TraitMailPost>();
-
-}
-
-                if (mail != null)
-                {
-                    mail.AddCard(pack);
-                    return true;
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            Plugin.LogDebug("home map mailbox failed: " + ex.Message);
-        }
-
-        // Last resort: vanilla PutInMailBox (may land on current zone floor / mailbox).
-        try
-        {
-            branch.PutInMailBox(pack);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Plugin.LogWarn("PutInMailBox fallback failed: " + ex.Message);
-            return false;
-        }
-    }
 
 
     static void StripMoney(List<Thing> things, bool keepLockpickCurrency = false)

@@ -56,6 +56,10 @@ internal class Plugin : BaseUnityPlugin
             // Per-class mount + audit instead of Harmony.PatchAll: a single signature
             // drift must not silently kill every patch class after it.
             PatchAudit.ApplyAll(Harmony, Assembly.GetExecutingAssembly());
+            // GetCostSp/GetDuration are virtual and several crafter subtypes
+            // override them; the attribute patches above only cover the base
+            // declaration. Mount the same postfixes on the overrides too.
+            CoCraftSpHookInstaller.Install(Harmony);
         }
         catch (System.Exception ex)
         {
@@ -65,9 +69,15 @@ internal class Plugin : BaseUnityPlugin
         RegisterReflexCommands("Awake-post");
         // BuildStamp = short git sha + build time; lets a shipped DLL be identified
         // from Player.log alone (the mod version itself never changes).
-        LogInfo($"NPC Labor {ModInfo.Version} (build {BuildStamp.Id}): slice A co-craft + B processor + D dungeon dispatch + E town labor ready.");
+        LogAlways($"NPC Labor {ModInfo.Version} (build {BuildStamp.Id}): slice A co-craft + B processor + D dungeon dispatch + E town labor ready.");
         LaborConfig.EnsureLoaded();
         SpecialRewardConfig.EnsureLoaded();
+
+        // Always-on single line: a bug report is useless when the reporter only
+        // *thinks* verbose logging was on. This makes the switch state auditable
+        // from LogOutput.log before any reproduction steps are even attempted.
+        LogAlways("[log] verbose diagnostics at boot: " + (LaborConfig.VerboseLog ? "ON" : "OFF") +
+                  " (toggle: Mod Config -> NPC Labor -> Debug -> Verbose diagnostics)");
     }
 
     private void Start()
@@ -261,11 +271,37 @@ internal class Plugin : BaseUnityPlugin
         }
     }
 
+    /// <summary>
+    /// Routine diagnostics are gated by the in-game "verbose log" switch, which is
+    /// OFF by default. Warnings/errors and the boot identity lines are never gated:
+    /// a bug report must still be able to show that the mod loaded and every patch
+    /// mounted, without asking the player to turn anything on first.
+    /// </summary>
+    internal static bool VerboseLog => LaborConfig.VerboseLog;
+
+    /// <summary>Unconditional Info line. Boot identity + patch audit only.</summary>
+    internal static void LogAlways(object message)
+        => Instance?.Logger.LogInfo(message);
+
     internal static void LogDebug(object message, [CallerMemberName] string caller = "")
-        => Instance?.Logger.LogDebug($"[{caller}] {message}");
+    {
+        // BepInEx's stock config (LogLevels = Fatal, Error, Warning, Message, Info)
+        // drops Debug from LogOutput.log entirely. Routing to Logger.LogDebug would
+        // make the switch look like a no-op, so verbose output is emitted at Info
+        // with a [dbg] tag while the switch is on.
+        if (VerboseLog)
+        {
+            Instance?.Logger.LogInfo($"[dbg][{caller}] {message}");
+        }
+    }
 
     internal static void LogInfo(object message)
-        => Instance?.Logger.LogInfo(message);
+    {
+        if (VerboseLog)
+        {
+            Instance?.Logger.LogInfo(message);
+        }
+    }
 
     internal static void LogWarn(object message)
         => Instance?.Logger.LogWarning(message);

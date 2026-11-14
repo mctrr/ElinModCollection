@@ -65,7 +65,7 @@ internal static class PatchAudit
             line += $" ({failed} failed, see errors above)";
         }
 
-        Plugin.LogInfo(line);
+        Plugin.LogAlways(line);
         Verify(asm);
     }
 
@@ -91,7 +91,7 @@ internal static class PatchAudit
         if (missing.Count == 0)
         {
             string ok = $"[patch] audit ok: all {declared.Count} patch methods mounted";
-            Plugin.LogInfo(ok);
+            Plugin.LogAlways(ok);
             return ok;
         }
 

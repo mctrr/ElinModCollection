@@ -843,7 +843,14 @@ Plugin.LogDebug(
             _menuOrders = CraftManager.OrdersFor(layer?.factory);
             if (NpcLabor.LaborConfig.FeatureCraft)
             {
-                options.Add(MenuProduce);
+                // Unlock gate (player 2026-11-02: base Lv2). Only the "assign" entry
+                // disappears; the cancel rows stay so an order placed before the gate
+                // was raised never becomes impossible to stop.
+                if (NpcLabor.LaborTerms.BaseCraftUnlocked)
+                {
+                    options.Add(MenuProduce);
+                }
+
                 for (int i = 0; i < _menuOrders.Count; i++)
                 {
                     options.Add(MenuCancelBase - i);

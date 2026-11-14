@@ -25,7 +25,22 @@ internal static class SkillPatches
             return false;
         }
 
-        return skillId == CoCraftSession.ReqSkillId || skillId == CoCraftSession.DurationSkillId;
+        // Account for every PC Evalue read while a session is live. A miss means
+        // the caller asked for a skill we do not rewrite - seeing "calls but 0 hits"
+        // in the summary is what tells us the patch was reached but the id drifted.
+        CoCraftSession.DiagEvalueCalls++;
+        bool hit = skillId == CoCraftSession.ReqSkillId ||
+                   skillId == CoCraftSession.DurationSkillId;
+        if (!hit)
+        {
+            CoCraftSession.DiagEvalueMisses++;
+            if (CoCraftSession.DiagEvalueMisses == 1)
+            {
+                CoCraftSession.DiagFirstMissSkill = skillId;
+            }
+        }
+
+        return hit;
     }
 
     static int Rewrite(Card card, int skillId)
@@ -38,7 +53,14 @@ internal static class SkillPatches
                            CoCraftSession.DurationSkillId != CoCraftSession.ReqSkillId
                 ? GetDurationNpcSkill()
                 : CoCraftSession.NpcSkill;
-            return pc + Mathf.FloorToInt(npcSkill * CoCraftSession.NpcSkillWeight);
+            int eff = pc + Mathf.FloorToInt(npcSkill * CoCraftSession.NpcSkillWeight);
+            CoCraftSession.DiagEvalueHits++;
+            CoCraftSession.DiagLastEff = eff;
+            Plugin.LogDebug(
+                $"[co] Evalue skill={skillId} pc={pc} npcSkill={npcSkill} " +
+                $"weight={CoCraftSession.NpcSkillWeight} -> eff={eff} " +
+                $"(req={CoCraftSession.ReqSkillId} dur={CoCraftSession.DurationSkillId})");
+            return eff;
         }
         finally
         {
@@ -114,6 +136,7 @@ internal static class SkillPatches
             return true;
         }
 
+        Plugin.LogDebug($"[co] Evalue(alias=\"{alias}\") -> id={id} rewriting");
         __result = Rewrite(__instance, id);
         return false;
     }

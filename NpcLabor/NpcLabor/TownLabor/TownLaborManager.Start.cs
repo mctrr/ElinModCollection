@@ -81,6 +81,14 @@ internal static partial class TownLaborManager
         }
 
         Zone? zone = EClass._zone;
+
+        // Unlock gate first: CanHostTownLabor also returns false below the level, and
+        // its generic "no work here" text would hide the real reason.
+        if (!NpcLabor.LaborTerms.CanTownWork(out string? unlockDeny))
+        {
+            return unlockDeny;
+        }
+
         if (!CanHostTownLabor(zone))
         {
             return NpcLabor.LaborText.T("town.error.noTownWork", NpcLabor.LaborTerms.TownWork);
@@ -234,6 +242,14 @@ string pcName;
         }
 
         Zone? zone = EClass._zone;
+
+        // Unlock gate first: CanHostTownLabor also returns false below the level, and
+        // its generic "no work here" text would hide the real reason.
+        if (!NpcLabor.LaborTerms.CanTownWork(out string? unlockDeny))
+        {
+            return unlockDeny;
+        }
+
         if (!CanHostTownLabor(zone))
         {
             return NpcLabor.LaborText.T("town.error.noTownWork", NpcLabor.LaborTerms.TownWork);

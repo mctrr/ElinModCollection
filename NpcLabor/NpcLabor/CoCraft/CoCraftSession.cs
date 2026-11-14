@@ -27,6 +27,18 @@ internal static class CoCraftSession
     /// <summary>Why the last clear happened, used for player-facing finish text.</summary>
     internal static string LastClearReason = "";
 
+    // Diagnostics only. Written by the co-craft patches, read by the verbose log
+    // and the end-of-session summary. They never feed any gameplay calculation.
+    internal static int DiagEvalueCalls;
+    internal static int DiagEvalueHits;
+    internal static int DiagEvalueMisses;
+    internal static int DiagFirstMissSkill;
+    internal static int DiagLastEff;
+    internal static int DiagSpHits;
+    internal static int DiagSpSkips;
+    internal static int DiagLastSpRaw;
+    internal static int DiagLastSpAdjusted;
+
     static int _npcSkillDuration;
     static int _npcSkillReq;
     /// <summary>Time.frameCount when the assistant was told to approach; drives the walk timeout.</summary>
@@ -34,6 +46,15 @@ internal static class CoCraftSession
     /// <summary>Max frames the craft waits for the assistant to walk over (~15s at 60fps).</summary>
     internal const int ApproachTimeoutFrames = 900;
 
+    /// <summary>
+    /// Resolve the assistant of the *live* session. Do not route through
+    /// AssistantResolver.IsValidAssistant here: LaborBusy's coCraft probe reports
+    /// this very assistant as busy while the session is active, so that check
+    /// always returned null and the NPC never received any craft experience
+    /// (confirmed by the 2026-11-13 verbose log: 32 "assistant unavailable" lines).
+    /// IsValidAssistant is for *choosing* a candidate from a roster, not for
+    /// looking up the one already assigned to us.
+    /// </summary>
     internal static Chara? GetAssistant()
     {
         if (!Active || NpcUid == 0)
@@ -42,7 +63,12 @@ internal static class CoCraftSession
         }
 
         Chara? c = RefChara.Get(NpcUid);
-        return AssistantResolver.IsValidAssistant(c) ? c : null;
+        if (c == null || c.isDead || c.isDestroyed)
+        {
+            return null;
+        }
+
+        return c;
     }
 
     static int GetNpcSkillFor(int skillId)
@@ -122,6 +148,7 @@ internal static class CoCraftSession
         NpcExpGranted = 0;
         AssistantName = AssistantResolver.NameOf(assistant);
         LastClearReason = "";
+        ResetDiagnostics();
         Active = true;
 
         Msg.SayRaw(NpcLabor.LaborText.T("co.msg.started", AssistantName ?? "?"));
@@ -263,6 +290,22 @@ internal static class CoCraftSession
         BatchNum = num > 0 ? num : 1;
     }
 
+    /// <summary>
+    /// Vanilla GetCostSp returns the cost for ONE craft unit, not a batch total:
+    /// TraitCrafter reads SourceRecipe.Row.sp, TraitFactory reads
+    /// RecipeSource.GetSPCost. AI_UseCrafter.Run stores that as costSP and charges
+    /// stamina.Mod(-costSP) on each completed progress (num times in a batch),
+    /// while UIRecipeInfo.RefreshBalance displays GetSPCost * countValid (the
+    /// batch total). The cut therefore applies to the per-unit value directly.
+    ///
+    /// Dividing by BatchNum here was wrong: for a batch of 32 with a unit cost of
+    /// 6 it computed perUnit=0, reducedPer=1, total=32, then Clamp(32, 1, 6)
+    /// returned the untouched 6 - i.e. the assist SP cut was a no-op even after
+    /// the override hooks were mounted.
+    ///
+    /// Locked rule (docs/CONTEXT.md): reduce GetCostSp by Floor(npcSkill*0.25),
+    /// min 1. Never increase the cost above the vanilla value.
+    /// </summary>
     internal static int AdjustCostSp(int baseSp)
     {
         if (!Active)
@@ -270,8 +313,8 @@ internal static class CoCraftSession
             return baseSp;
         }
 
-        int reduced = baseSp - Mathf.FloorToInt(NpcSkill * NpcSpPerSkill);
-        return Mathf.Max(1, reduced);
+        int cut = Mathf.FloorToInt(NpcSkill * NpcSpPerSkill);
+        return Mathf.Clamp(baseSp - cut, 1, Mathf.Max(1, baseSp));
     }
 
     internal static void AddNpcExpGranted(int amount)
@@ -299,7 +342,15 @@ internal static class CoCraftSession
             AnnounceFinish(reason);
         }
 
-        Plugin.LogDebug($"co-craft clear ({reason}) uid={NpcUid} expGranted={NpcExpGranted}");
+        // One line per craft: proves whether the skill rewrite / SP cut actually ran,
+        // how often, and what the final numbers were. Gated by the verbose switch.
+        Plugin.LogDebug(
+            $"co-craft clear ({reason}) uid={NpcUid} npcExp={NpcExpGranted} " +
+            $"evalueHits={DiagEvalueHits}/{DiagEvalueCalls} misses={DiagEvalueMisses} " +
+            $"firstMissSkill={DiagFirstMissSkill} lastEff={DiagLastEff} " +
+            $"spHits={DiagSpHits} spSkips={DiagSpSkips} " +
+            $"spRaw={DiagLastSpRaw} spAdjusted={DiagLastSpAdjusted} " +
+            $"costSp={CostSp} duration={Duration} batch={BatchNum}");
         Active = false;
         NpcUid = 0;
         ReqSkillId = 0;
@@ -314,6 +365,20 @@ internal static class CoCraftSession
         AssistantName = null;
         _npcSkillDuration = 0;
         _npcSkillReq = 0;
+        ResetDiagnostics();
+    }
+
+    static void ResetDiagnostics()
+    {
+        DiagEvalueCalls = 0;
+        DiagEvalueHits = 0;
+        DiagEvalueMisses = 0;
+        DiagFirstMissSkill = 0;
+        DiagLastEff = 0;
+        DiagSpHits = 0;
+        DiagSpSkips = 0;
+        DiagLastSpRaw = 0;
+        DiagLastSpAdjusted = 0;
     }
 
     static void AnnounceFinish(string reason)

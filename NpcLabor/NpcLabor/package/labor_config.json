@@ -39,6 +39,12 @@
   },
   "unlock": {
     "regionBranchLv": 3,
-    "dungeonBranchLv": 5
+    "dungeonBranchLv": 5,
+    "townLaborBranchLv": 2,
+    "craftBranchLv": 2,
+    "pdispatchBranchLv": 2
+  },
+  "log": {
+    "verbose": false
   }
 }

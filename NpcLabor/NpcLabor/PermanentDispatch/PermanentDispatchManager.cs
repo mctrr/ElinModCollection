@@ -119,6 +119,13 @@ internal static partial class PermanentDispatchManager
             return LaborText.T("pdisp.err.invalid");
         }
 
+        // Unlock gate (player 2026-11-02: base Lv2). The board already hides the rows;
+        // this keeps any other path (console, journal, future UI) honest.
+        if (!LaborTerms.CanPDispatch(out string? unlockDeny))
+        {
+            return unlockDeny;
+        }
+
         if (PermanentDispatchDef.ResolveZone(def.ZoneId) == null)
         {
             return LaborText.T("pdisp.err.noZone", def.Name);

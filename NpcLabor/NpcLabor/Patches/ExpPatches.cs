@@ -36,6 +36,7 @@ internal static class ExpPatches
         Chara? npc = CoCraftSession.GetAssistant();
         if (npc?.elements == null)
         {
+            Plugin.LogDebug($"[co] npc exp skipped: assistant unavailable uid={CoCraftSession.NpcUid}");
             return;
         }
 
@@ -45,7 +46,10 @@ internal static class ExpPatches
         {
             npc.elements.ModExp(ele, give);
             CoCraftSession.AddNpcExpGranted(give);
-            Plugin.LogDebug($"npc exp +{give} skill={ele} from pc raw={a:0.#}");
+            Plugin.LogDebug(
+                $"[co] npc exp +{give} skill={ele} " +
+                $"npc={CoCraftSession.AssistantName}#{CoCraftSession.NpcUid} " +
+                $"fromPcRaw={a:0.#} share={CoCraftSession.NpcExpShare}");
         }
         catch (System.Exception ex)
         {

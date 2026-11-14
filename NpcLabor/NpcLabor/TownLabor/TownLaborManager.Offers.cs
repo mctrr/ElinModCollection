@@ -38,6 +38,13 @@ internal static partial class TownLaborManager
             return false;
         }
 
+        // Unlock gate (player 2026-11-02: base Lv2). Row-less until then, and the
+        // same test runs from Start, so the board is not the only way in.
+        if (!LaborTerms.TownWorkUnlocked)
+        {
+            return false;
+        }
+
         try
         {
             // Prefer towns; still allow non-base settlements that host merchants.

@@ -28,9 +28,6 @@ internal static class PermanentDispatchUi
             id = "npclabor_pdispatch_" + defId,
             // 剩余 column counts down to the next whole-month settlement.
             deadline = PermanentDispatchManager.NextMonthRaw(),
-            // The 报酬 column is the game's own money slot; the loot list lives in
-            // the body text instead of being advertised as a number.
-            rewardMoney = def?.MoneyPerMonth ?? 0,
             uidClientZone = post?.uid ?? 0,
             track = false,
             isNew = false,
@@ -41,6 +38,21 @@ internal static class PermanentDispatchUi
         q.AssignUid();
 
         Chara? worker = active ? PermanentDispatchManager.FindWorker(defId) : null;
+
+        // 报酬 column. Pay is base + rate x skill since the balance pass, so a
+        // running posting must quote what the worker on it actually earns;
+        // an offer only knows the floor (nobody is hired yet).
+        try
+        {
+            q.rewardMoney = active && worker != null && def != null
+                ? def.MonthlyMoney(worker)
+                : def?.MoneyPerMonth ?? 0;
+        }
+        catch
+        {
+            q.rewardMoney = def?.MoneyPerMonth ?? 0;
+        }
+
         if (worker != null)
         {
             try
@@ -77,6 +89,13 @@ internal static class PermanentDispatchUi
     internal static void AppendBoardRows(LayerQuestBoard board)
     {
         if (board?.list == null || !LaborConfig.FeatureEnabled)
+        {
+            return;
+        }
+
+        // Unlock gate (player 2026-11-02: base Lv2). Running postings are unaffected —
+        // they stay readable and cancellable from the journal.
+        if (!LaborTerms.PDispatchUnlocked)
         {
             return;
         }
@@ -163,6 +182,67 @@ internal static class PermanentDispatchUi
         }
 
         rebuild.Invoke(list, rebuild.GetParameters().Length == 1 ? new object[] { false } : null);
+
+        SuppressTrackButton(list);
+    }
+
+    /// <summary>
+    /// Vanilla wires a 追踪 button onto every journal row. Posting rows are
+    /// display-only and never enter <c>EClass.game.quests.list</c>, so pinning one
+    /// gives <see cref="WidgetQuestTracker"/> no row to build: <c>items</c> stays
+    /// empty, the freshly activated widget <c>Deactivate()</c>s itself from inside
+    /// its own <c>OnActivate -> Refresh</c>, and ContentQuest's follow-up
+    /// <c>WidgetQuestTracker.Instance.Refresh()</c> then runs <c>RebuildLayout</c>
+    /// on the DestroyImmediate'd object (NRE at <c>Component.get_transform</c>).
+    ///
+    /// A row that cannot be tracked must not offer the button. Called on every
+    /// journal rebuild, so vanilla's onInstantiate re-wiring never survives.
+    /// </summary>
+    static void SuppressTrackButton(object list)
+    {
+        if (list is not UIList ui)
+        {
+            return;
+        }
+
+        foreach (UIList.ButtonPair pair in ui.buttons)
+        {
+            if (pair.component is not ItemGeneral row)
+            {
+                continue;
+            }
+
+            UIButton? track = row.button3;
+            if (track == null)
+            {
+                continue;
+            }
+
+            bool mine = pair.obj is QuestNpcLaborPDispatch;
+
+            try
+            {
+                // Vanilla paints the pin by activating/deactivating button3.icon's
+                // GameObject (ContentQuest.RefreshTrackButtons -> ClassExtension.SetActive),
+                // so leave icon and interactable alone: touching them is what leaves a
+                // row stuck in the "pressed" look. Hide the whole button on our rows,
+                // and explicitly show it on every other row -- UIList recycles
+                // ItemGeneral instances, so a hidden button would otherwise follow the
+                // component onto a vanilla quest.
+                if (mine)
+                {
+                    // SetOnClick also drops the vanilla listener (track toggle + tracker
+                    // refresh), leaving a no-op so a stray click cannot rearm the crash.
+                    track.SetOnClick(() => { });
+                }
+
+                track.gameObject.SetActive(!mine);
+            }
+            catch (Exception ex)
+            {
+                Plugin.LogDebug("pdispatch journal track button: " + ex.Message);
+            }
+        }
     }
 
     static MethodInfo? FindSingleArg(Type t, string name)
@@ -280,7 +360,9 @@ internal static class PermanentDispatchUi
 
         if (candidates.Count == 0)
         {
-            Msg.Say(LaborText.T("pdisp.ui.noCandidate", def.Name));
+            // The gate lives here instead of in the posting text: when nobody
+            // qualifies is the one moment the player actually needs to see it.
+            Msg.Say(LaborText.T("pdisp.ui.noCandidate", def.Name) + " " + def.GateText());
             SE.Beep();
             return;
         }
@@ -300,9 +382,23 @@ internal static class PermanentDispatchUi
                 Chara? c = candidates.Find(x => x.uid == uid);
                 string name = c?.NameSimple ?? c?.Name ?? ("#" + uid);
                 int skill = def.GateSkill > 0 ? SafeSkill(c, def.GateSkill) : 0;
-                return skill > 0
+                string label = skill > 0
                     ? name + "  " + PermanentDispatchDef.SkillName(def.GateSkill) + ":" + skill
                     : name;
+
+                // Pay is base + rate x skill, so the board can only quote the
+                // floor; here we know the candidate, so show what they'd earn.
+                try
+                {
+                    int pay = c != null ? def.MonthlyMoney(c) : 0;
+                    if (pay > 0)
+                    {
+                        label += "  " + LaborText.T("reward.money", pay);
+                    }
+                }
+                catch { }
+
+                return label;
             },
             (uid, item) =>
             {

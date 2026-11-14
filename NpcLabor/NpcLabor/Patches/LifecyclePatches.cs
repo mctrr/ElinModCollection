@@ -11,6 +11,8 @@ namespace NpcLabor.Patches;
 [HarmonyPatch(typeof(AI_UseCrafter))]
 internal static class AiUseCrafterPatches
 {
+    static int _lastNoAssistantSkill;
+
     [HarmonyPrefix]
     [HarmonyPatch(nameof(AI_UseCrafter.OnStart))]
     static void OnStartPrefix(AI_UseCrafter __instance)
@@ -195,6 +197,17 @@ internal static class AiUseCrafterPatches
         Chara? assistant = AssistantResolver.ResolveForCraft(skillId);
         if (assistant == null)
         {
+            // Always-on warning: an assist the player explicitly enabled that
+            // resolves nobody is actionable (whole roster busy / wrong skill /
+            // NPC not in zone), and it explains why BOTH the effective-skill
+            // bonus and the SP cut are missing. Assist Off is normal and silent.
+            if (!AssistantResolver.IsOff && _lastNoAssistantSkill != skillId)
+            {
+                _lastNoAssistantSkill = skillId;
+                Plugin.LogWarn($"[cocraft] assist is ON but no valid assistant for skill={skillId} " +
+                               "(candidates busy / skill<=0 / not in zone); craft runs without assist");
+            }
+
             Plugin.LogInfo($"[cocraft] OpenFromAi: skill={skillId} but no assistant resolved (pin={AssistantResolver.PinnedUid?.ToString() ?? "null"})");
             CoCraftSession.Clear("no-assistant");
             return;
