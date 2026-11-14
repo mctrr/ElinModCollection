@@ -49,7 +49,12 @@ internal static class ModConfigUi
     }
 
     internal static void Reset()
-        => LaborConfig.ResetToDefaults();
+    {
+        LaborConfig.ResetToDefaults();
+        // Defaults have verbose=false; a reset must not leave the probe mounted
+        // while the switch reads OFF.
+        NpcLabor.Patches.StaminaProbe.Install(false);
+    }
 
     static void BuildFeatures(UINote note, LaborConfigFile c)
     {
@@ -151,10 +156,13 @@ internal static class ModConfigUi
         Toggle(note, "cfg.dbg.verbose", () => c.Log.Verbose, v =>
         {
             c.Log.Verbose = v;
+            // The read-only StatsStamina.Mod probe lives inside this switch:
+            // ON mounts it in the same frame, OFF removes the Harmony patch.
+            NpcLabor.Patches.StaminaProbe.Install(v);
+            string probe = NpcLabor.Patches.StaminaProbe.Installed ? "ON" : "OFF";
             Plugin.LogAlways(v
-                ? $"[log] verbose diagnostics ON (build {BuildStamp.Id}) - reproduce the issue now"
-                : "[log] verbose diagnostics OFF");
-
+                ? $"[log] verbose diagnostics ON (build {BuildStamp.Id}) - reproduce the issue now; stamina probe={probe}"
+                : $"[log] verbose diagnostics OFF; stamina probe={probe}");
         });
         note.AddTopic(LaborText.T("cfg.dbg.verboseHint"), "");
         note.AddTopic(LaborText.T("cfg.dbg.pdispHint"), "");

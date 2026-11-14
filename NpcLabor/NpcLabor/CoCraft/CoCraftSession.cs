@@ -139,6 +139,10 @@ internal static class CoCraftSession
         Active = true;
 
         Msg.SayRaw(NpcLabor.LaborText.T("co.msg.started", AssistantName ?? "?"));
+        // Session bracket for the verbose stamina probe: without an open/clear
+        // pair the per-unit [sp] lines have no batch to be grouped against.
+        Plugin.LogDebug($"[co] open npc={AssistantName}#{NpcUid} req={ReqSkillId} " +
+                        $"npcSkill={NpcSkill} eff={Eff}");
         return true;
     }
 
@@ -319,6 +323,12 @@ internal static class CoCraftSession
         }
 
         ReleaseAssistant();
+
+        // Logged before the fields are zeroed so the closing bracket still shows
+        // the batch size and the SP cost the session actually used. Gated by the
+        // verbose switch, the same one that mounts the stamina probe.
+        Plugin.LogDebug($"[co] clear reason={reason} npcExp={NpcExpGranted} " +
+                        $"costSp={CostSp} duration={Duration} batch={BatchNum}");
 
         LastClearReason = reason ?? "";
         if (announce && Active)

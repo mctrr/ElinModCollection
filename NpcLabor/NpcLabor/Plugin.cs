@@ -73,10 +73,15 @@ internal class Plugin : BaseUnityPlugin
         LaborConfig.EnsureLoaded();
         SpecialRewardConfig.EnsureLoaded();
 
+        // The deep stamina probe is part of the verbose switch, not a boot-time
+        // patch: with diagnostics off it is not in Harmony's patch table at all.
+        StaminaProbe.Install(LaborConfig.VerboseLog);
+
         // Always-on single line: a bug report is useless when the reporter only
         // *thinks* verbose logging was on. This makes the switch state auditable
         // from LogOutput.log before any reproduction steps are even attempted.
         LogAlways("[log] verbose diagnostics at boot: " + (LaborConfig.VerboseLog ? "ON" : "OFF") +
+                  "; stamina probe=" + (StaminaProbe.Installed ? "ON" : "OFF") +
                   " (toggle: Mod Config -> NPC Labor -> Debug -> Verbose diagnostics)");
     }
 
